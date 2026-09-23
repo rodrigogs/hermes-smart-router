@@ -62,7 +62,7 @@ DEFAULT_ADAPTERS = (
         # e o detector dizia confirmed vigiando o TÍTULO, não a regra. 非高峰期
         # aparece primeiro na linha da regra: "夜间优惠速率:非高峰期（北京时间
         # 0:00-8:00，即 UTC 16:00-24:00） 0.8x 消耗系数。" — o coeficiente e a janela.
-        "非高峰期",
+        "夜间优惠消耗速率",
         key="xiaomi-token-plan",
     ),
 )
@@ -176,7 +176,13 @@ def _fetch(url: str) -> str:
     if urlparse(url).hostname != "mimo.mi.com":
         return page
     entry = re.search(r'["\'](?P<src>/static/main\.[^"\']+\.js)["\']', page)
-    return page if entry is None else page + "\n" + get(urljoin(url, entry.group("src")))
+    if entry is None:
+        return page
+    bundle = get(urljoin(url, entry.group("src")))
+    # The bundle is minified into one line.  Split object-property boundaries so
+    # ProviderAdapter can preserve the actual localized clause, not the whole JS
+    # program that happens to contain it.
+    return page + "\n" + re.sub(r'(?=,"(?:[^"\\]|\\.)+":)', "\n", bundle)
 
 
 def _create_card(payload: Dict[str, str]) -> None:

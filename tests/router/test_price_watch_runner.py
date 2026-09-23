@@ -232,7 +232,7 @@ def test_fetch_reads_mimo_entry_bundle_when_the_document_is_client_rendered(monk
         "https://mimo.mi.com/docs/zh-CN/quick-start/faq/token-plan": (
             '<html><script defer src="/static/main.abc123.chunk.js"></script></html>'
         ),
-        "https://mimo.mi.com/static/main.abc123.chunk.js": "夜间优惠速率:非高峰期 0.8x",
+        "https://mimo.mi.com/static/main.abc123.chunk.js": ',"list4":"夜间优惠消耗速率:非高峰期 0.8x"',
     }
 
     def fake_urlopen(request: object, timeout: int) -> Response:
@@ -242,9 +242,9 @@ def test_fetch_reads_mimo_entry_bundle_when_the_document_is_client_rendered(monk
         return Response(pages[request.full_url])
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    assert "非高峰期" in runner._fetch(
-        "https://mimo.mi.com/docs/zh-CN/quick-start/faq/token-plan"
-    )
+    page = runner._fetch("https://mimo.mi.com/docs/zh-CN/quick-start/faq/token-plan")
+    adapter = next(item for item in runner.DEFAULT_ADAPTERS if item.key == "xiaomi-token-plan")
+    assert adapter.extract(page) == ',"list4":"夜间优惠消耗速率:非高峰期 0.8x"'
     assert seen == list(pages)
 
 
@@ -257,7 +257,7 @@ def test_xiaomi_anchors_target_the_rule_phrase_not_the_title() -> None:
     # a deliberate operator act, so the pin breaks loudly instead of silently
     # watching a title again.
     by_key = {adapter.key: adapter for adapter in runner.DEFAULT_ADAPTERS}
-    assert by_key["xiaomi-token-plan"].anchor == "非高峰期"
+    assert by_key["xiaomi-token-plan"].anchor == "夜间优惠消耗速率"
     assert by_key["xiaomi-pay-as-you-go"].anchor == "按实际 Token 用量消耗账户余额"
 
 
