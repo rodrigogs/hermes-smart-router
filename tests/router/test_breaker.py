@@ -1,7 +1,6 @@
 """Unit tests for auto-breaker (router/breaker.py and router/blocklist.py)."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -306,7 +305,7 @@ BLOCKLIST_CONFIG = {
 class TestBlocklistWithBreaker:
     """Blocklist integration with BreakerState."""
 
-    def test_state_write_lands_under_the_temp_home(self, hermetic_state):
+    def test_state_write_lands_under_the_temp_home(self, hermetic_state, tmp_path):
         """A real persist lands in the throwaway home, and only there.
 
         The fixture asserts where a write is *aimed*; this asserts where one
@@ -319,8 +318,10 @@ class TestBlocklistWithBreaker:
         assert hermetic_state.exists()
         state = json.loads(hermetic_state.read_text(encoding="utf-8"))
         assert "canary@temp-prov" in state["entries"]
-        # The one file this fixture exists to keep out of the way.
-        assert Path.home() / ".hermes" not in hermetic_state.parents
+        # The real write must remain inside pytest's isolated filesystem.  TMPDIR
+        # may itself be under the operator's home, so comparing against Path.home()
+        # incorrectly rejects an otherwise hermetic test run.
+        assert tmp_path.resolve() in hermetic_state.resolve().parents
 
     def test_config_ban_still_fires(self):
         bl = Blocklist(BLOCKLIST_CONFIG)
