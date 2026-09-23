@@ -248,6 +248,29 @@ def test_fetch_reads_mimo_entry_bundle_when_the_document_is_client_rendered(monk
     assert seen == list(pages)
 
 
+def test_fetch_keeps_a_mimo_page_without_a_declared_entry_bundle(monkeypatch) -> None:
+    import urllib.request
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"<html>temporary document shell</html>"
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        assert isinstance(request, urllib.request.Request)
+        assert request.full_url == "https://mimo.mi.com/docs/transient"
+        assert timeout == 30
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert runner._fetch("https://mimo.mi.com/docs/transient") == "<html>temporary document shell</html>"
+
+
 def test_xiaomi_anchors_target_the_rule_phrase_not_the_title() -> None:
     # These strings are the contract with the supplier pages: the token-plan
     # anchor must be the off-peak clause (非高峰期), never "Token Plan", which
