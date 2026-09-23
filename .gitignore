@@ -42,6 +42,10 @@ state/
 *.db
 # Live config (seeded from router.example.yaml on first run; edit freely)
 router.yaml
+# Operator config backups and dashboard snapshots live only in the served copy.
+# They are intentionally not deployable source, but must not mark production dirty.
+router*.yaml.bak*
+app-state.png
 
 # Playwright MCP session debris (page snapshots, console logs) from live measurement
 # against a running install. Never an input to any test; regenerated per session.
