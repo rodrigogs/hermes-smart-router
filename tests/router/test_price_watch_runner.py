@@ -210,6 +210,44 @@ def test_fetch_uses_a_browser_user_agent_without_live_network(monkeypatch) -> No
     }
 
 
+def test_fetch_reads_mimo_entry_bundle_when_the_document_is_client_rendered(monkeypatch) -> None:
+    import urllib.request
+
+    seen: list[str] = []
+
+    class Response:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.text.encode("utf-8")
+
+    pages = {
+        "https://mimo.mi.com/docs/zh-CN/quick-start/faq/token-plan": (
+            '<html><script defer src="/static/main.abc123.chunk.js"></script></html>'
+        ),
+        "https://mimo.mi.com/static/main.abc123.chunk.js": "夜间优惠速率:非高峰期 0.8x",
+    }
+
+    def fake_urlopen(request: object, timeout: int) -> Response:
+        assert isinstance(request, urllib.request.Request)
+        assert timeout == 30
+        seen.append(request.full_url)
+        return Response(pages[request.full_url])
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert "非高峰期" in runner._fetch(
+        "https://mimo.mi.com/docs/zh-CN/quick-start/faq/token-plan"
+    )
+    assert seen == list(pages)
+
+
 def test_xiaomi_anchors_target_the_rule_phrase_not_the_title() -> None:
     # These strings are the contract with the supplier pages: the token-plan
     # anchor must be the off-peak clause (非高峰期), never "Token Plan", which

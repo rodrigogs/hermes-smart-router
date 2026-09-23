@@ -156,12 +156,27 @@ def _dotenv_names(path: Path) -> Set[str]:
 
 
 def _fetch(url: str) -> str:
-    """Fetch supplier HTML only at this isolated cron edge."""
+    """Fetch supplier HTML only at this isolated cron edge.
+
+    MiMo's token-plan FAQ is rendered from its versioned browser bundle rather
+    than the document shell.  Include that declared entry bundle so an anchor in
+    the rendered FAQ remains observable without a browser or a brittle hashed
+    asset URL in the policy.
+    """
+    import re
+    from urllib.parse import urljoin, urlparse
     from urllib.request import Request, urlopen
 
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0 (pricing provenance watcher)"})
-    with urlopen(request, timeout=30) as response:  # noqa: S310 -- fixed supplier URLs above
-        return response.read().decode("utf-8", errors="replace")
+    def get(target: str) -> str:
+        request = Request(target, headers={"User-Agent": "Mozilla/5.0 (pricing provenance watcher)"})
+        with urlopen(request, timeout=30) as response:  # noqa: S310 -- fixed supplier URLs above
+            return response.read().decode("utf-8", errors="replace")
+
+    page = get(url)
+    if urlparse(url).hostname != "mimo.mi.com":
+        return page
+    entry = re.search(r'["\'](?P<src>/static/main\.[^"\']+\.js)["\']', page)
+    return page if entry is None else page + "\n" + get(urljoin(url, entry.group("src")))
 
 
 def _create_card(payload: Dict[str, str]) -> None:
