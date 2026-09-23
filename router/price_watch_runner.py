@@ -166,11 +166,12 @@ def _fetch(url: str) -> str:
 
 def _create_card(payload: Dict[str, str]) -> None:
     """Open an unassigned review card; a watcher never edits the registry."""
-    from hermes_cli import kanban_db
+    from hermes_cli.kanban_db import create_task
+    from hermes_cli.kanban_db_connect import connect
 
-    conn = kanban_db.connect(board=os.environ.get("HERMES_KANBAN_BOARD", "capability-router"))
+    conn = connect(board=os.environ.get("HERMES_KANBAN_BOARD", "capability-router"))
     try:
-        kanban_db.create_task(
+        create_task(
             conn,
             title=payload["title"],
             body=payload["body"],
