@@ -185,10 +185,29 @@ def _fetch(url: str) -> str:
     return page + "\n" + re.sub(r'(?=,"(?:[^"\\]|\\.)+":)', "\n", bundle)
 
 
+def _load_kanban_surface() -> tuple:
+    """Import the kanban card-opening surface across both core layouts.
+
+    The served runtime tree MOVES: the same checkout has been seen pre-split
+    (2026-09-02 merge, ``connect`` lives in ``hermes_cli.kanban_db``) and
+    post-split (upstream's ``kanban_db_connect.py`` with a PEP 562 compat map
+    on ``kanban_db``). Importing the sub-module directly therefore works on
+    Monday and breaks on Tuesday with no plugin change. Import through the
+    stable ``hermes_cli.kanban_db`` module name — real ``connect`` on both
+    trees, and the test fakes already live there — and only fall back to the
+    post-split sub-module when the flat module somehow lacks it.
+    """
+    from hermes_cli import kanban_db as kb  # absent on CI — callers handle ImportError
+    connect = getattr(kb, "connect", None)
+    if connect is None:  # post-split tree without the compat map
+        from hermes_cli.kanban_db_connect import connect
+    create_task = kb.create_task
+    return create_task, connect
+
+
 def _create_card(payload: Dict[str, str]) -> None:
     """Open an unassigned review card; a watcher never edits the registry."""
-    from hermes_cli.kanban_db import create_task
-    from hermes_cli.kanban_db_connect import connect
+    create_task, connect = _load_kanban_surface()
 
     conn = connect(board=os.environ.get("HERMES_KANBAN_BOARD", "capability-router"))
     try:

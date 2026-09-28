@@ -155,17 +155,15 @@ def test_create_card_and_main_are_thin_edges(monkeypatch, capsys) -> None:
 
     kanban_db = types.SimpleNamespace(
         create_task=lambda conn, **kwargs: calls.append((conn, kwargs)),
+        connect=lambda board=None: calls.append(board) or Connection(),
     )
-    kanban_db_connect = types.SimpleNamespace(
-        connect=lambda board: calls.append(board) or Connection(),
-    )
-    # CI installs no hermes_cli at all.  The production edge imports the real
-    # connection factory directly, rather than through the expired compat path.
+    # CI installs no hermes_cli at all.  The production edge imports through the
+    # flat ``hermes_cli.kanban_db`` module — the one module name that exists on
+    # BOTH core layouts (pre- and post-kanban-DB split) — so the fake lives there.
     hermes_cli = types.ModuleType("hermes_cli")
     hermes_cli.__path__ = []  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
     monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db", kanban_db)
-    monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db_connect", kanban_db_connect)
     runner._create_card({"title": "review", "body": "evidence"})
     assert calls[0] == "capability-router"
     assert calls[-1] == "closed"
@@ -177,6 +175,30 @@ def test_create_card_and_main_are_thin_edges(monkeypatch, capsys) -> None:
     )
     assert runner.main(["--state", "/tmp/state.json"]) == 0
     assert '"checked": ["deepseek"]' in capsys.readouterr().out
+
+
+def test_create_card_falls_back_when_flat_module_lacks_connect(monkeypatch) -> None:
+    """Post-split core whose ``kanban_db`` dropped the compat map entirely."""
+    calls: list[object] = []
+
+    class Connection:
+        def close(self) -> None:
+            calls.append("closed")
+
+    kanban_db = types.SimpleNamespace(
+        create_task=lambda conn, **kwargs: calls.append((conn, kwargs)),
+    )  # no ``connect`` — the fallback sub-module owns it
+    kanban_db_connect = types.SimpleNamespace(
+        connect=lambda board=None: calls.append(board) or Connection(),
+    )
+    hermes_cli = types.ModuleType("hermes_cli")
+    hermes_cli.__path__ = []  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hermes_cli", hermes_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db", kanban_db)
+    monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db_connect", kanban_db_connect)
+    runner._create_card({"title": "review", "body": "evidence"})
+    assert calls[0] == "capability-router"
+    assert calls[-1] == "closed"
 
 
 def test_fetch_uses_a_browser_user_agent_without_live_network(monkeypatch) -> None:

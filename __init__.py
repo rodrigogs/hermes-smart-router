@@ -1343,7 +1343,14 @@ def _read_kanban_task(task_id: str, board: Optional[str]) -> Any:
     except ImportError:  # pragma: no cover - CI has no hermes_cli
         return None
     try:
-        conn = _kb.connect(board=board)
+        connect = getattr(_kb, "connect", None)
+        if connect is None:
+            # Post-split core whose kanban_db dropped the compat map: the
+            # sub-module owns the factory. The runtime tree MOVES between
+            # layouts (same checkout, different branches), so both shapes are
+            # live possibilities and neither is an error.
+            from hermes_cli.kanban_db_connect import connect
+        conn = connect(board=board)
         try:
             return _kb.get_task(conn, task_id)
         finally:

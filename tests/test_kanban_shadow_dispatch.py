@@ -237,6 +237,27 @@ def test_read_kanban_task_empty_id_short_circuits():
     assert dp._read_kanban_task("", None) is None
 
 
+def test_read_kanban_task_survives_post_split_core(monkeypatch):
+    """Post-split ``kanban_db`` without ``connect``: the sub-module owns it."""
+    card = _card("Fix the bug", "body text")
+    fake_cli = types.ModuleType("hermes_cli")
+    fake_kb = types.ModuleType("hermes_cli.kanban_db")
+    fake_connect = types.ModuleType("hermes_cli.kanban_db_connect")
+
+    class _Conn:
+        def close(self):
+            pass
+
+    fake_kb.connect = None  # compat map dropped
+    fake_kb.get_task = lambda conn, task_id: card
+    fake_connect.connect = lambda board=None: _Conn()
+    fake_cli.kanban_db = fake_kb
+    monkeypatch.setitem(sys.modules, "hermes_cli", fake_cli)
+    monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db", fake_kb)
+    monkeypatch.setitem(sys.modules, "hermes_cli.kanban_db_connect", fake_connect)
+    assert dp._read_kanban_task("t1", "board") is card
+
+
 def test_read_kanban_task_returns_none_when_the_board_read_raises(monkeypatch):
     fake_cli = types.ModuleType("hermes_cli")
     fake_kb = types.ModuleType("hermes_cli.kanban_db")
