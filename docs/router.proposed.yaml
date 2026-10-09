@@ -1,0 +1,600 @@
+# Capability-router policy — SHIPPED DEFAULT (tracked).
+#
+# This file is a TEMPLATE. On first load it is copied to router.yaml, which is
+# gitignored and becomes yours; editing router.yaml is live with no restart, and
+# `rm router.yaml` re-seeds it from here. Writes through the operator UI use
+# yaml.safe_dump and do NOT preserve comments, so keep this file as the readable
+# original.
+#
+# WHAT A NEW INSTALLER MUST DECIDE — none of it can be defaulted for you:
+#   1. WHICH RAILS YOU ACTUALLY HAVE. The roster below assumes three
+#      entitlements: a Z.ai Coding Plan (`plan`), one OpenAI/Codex seat
+#      (`subscription`) and per-token API keys (`metered`). Swap in the vendors
+#      you hold and correct every `billing_mode` to how YOU pay for that elo.
+#      billing_mode is not a label: `fallback_strategy: cheapest_now` ranks by it
+#      and `time_cap` only removes elos it puts in the dollars bucket
+#      (metered/subscription), so a wrong mode silently changes routing.
+#   2. YOUR UTC OFFSET. Every window here is UTC, because that is how the
+#      providers bill. The deepseek and zai peaks overlap at 06:00-10:00 UTC on
+#      WEEKDAYS ONLY (deepseek also peaks 01:00-04:00 daily and all weekend at
+#      06:00-10:00; zai's window is Mon-Fri); on the reference install (UTC-03)
+#      06:00-10:00 UTC is 03:00-07:00 local, i.e. overnight unattended work pays
+#      double on both primary rails at once. Where the two windows DIVERGE is
+#      where T3/T4's `avoid_peak` reorders — 15 of the week's 168 hours — so work
+#      out where BOTH blocks land in your timezone before tuning anything
+#      time-related.
+#   3. WHETHER TO ENABLE the commented-out `defer-heavy-work-off-peak` rule
+#      (see the note on it). It trades capability for price, so it is off here.
+#   4. YOUR OWN blocklist.manual_ban — shipped empty on purpose.
+#   5. WHICH MODELS YOU TRUST. The ids below are all known to the capability
+#      registry, but quality is a judgement about your workload. Bench them.
+#
+# STRUCTURAL RULES worth knowing before you edit:
+#   * `tiers` is the single source of routing truth. A rule never names a
+#     concrete model — it emits a tier alias (T1-T4) which rules._resolve_tiers
+#     expands into {model, provider, fallback[]}.
+#   * Every tier has THREE hops, and each third hop is deliberately a different
+#     vendor AND a different billing rail from the first two, so one provider's
+#     quota or outage cannot take a whole tier down.
+#   * Every tier must be DISTINCT and every tier must be REACHABLE from Table 1.
+#     Check both after any edit: an unreachable tier is decoration.
+#   * TIME LAYER. The clock is INJECTED, never read — signals.py and rules.py are
+#     pure and IO-free, and the caller at the edge supplies the UTC time (like the
+#     random.Random threaded for `fallback_strategy: random`). No clock supplied
+#     means time-agnostic: `cheapest_now` degrades to sequential, `time_policy`
+#     and `time_cap` are no-ops, and a time-keyed rule never matches. Nothing
+#     raises and nothing guesses an hour.
+#   * Registry prices are the BASE rate — the rate OUTSIDE every declared window.
+#     Do not "correct" a stored price to its peak number; that double-counts the
+#     multiplier. Declared windows, half-open [start, end):
+#         deepseek  2.0x at 01:00-04:00 and 06:00-10:00 UTC, EVERY day
+#         zai       2.0x at 06:00-10:00 UTC, MON-FRI only (weekends off-peak)
+#         xiaomi    NO window: the 0.8x night rate is a prepaid Token Plan credit
+#                   coefficient, and pay-as-you-go bills flat (measured 2026-08-26)
+#     06:00-10:00 covers 06:00 through 09:59; hour 10 already bills at base.
+#   * PRICE-WINDOW OVERLAY. The top-level `price_windows` table lets you move a
+#     model's windows without editing the code registry. It is keyed by EXACT
+#     model id (no provider key) and REPLACES that model's registry windows
+#     whole; a model absent from it keeps the registry's windows, and `[]` makes
+#     a model flat ("sem janela local"). A per-elo `price_windows` on a tier
+#     still wins over this table. Precedence: tier declaration > overlay >
+#     registry. UTC, half-open [start, end), like every window:
+#
+#         price_windows:
+#           glm-5.3:
+#             - hours_utc: [6, 10]
+#               weekdays: [0, 1, 2, 3, 4]
+#               multiplier: 2.0
+#           # The extended form also carries WHEN a person last confirmed the
+#           # window against the provider's page (never the auto-read time):
+#           mimo-v2.5:
+#             price_windows: [{hours_utc: [16, 24], multiplier: 0.8}]
+#             price_windows_verified: "2026-08-26"
+#
+#     A window crossing midnight is TWO entries; a malformed overlay is refused
+#     at the write gate, never half-applied.
+#   * Order of operations in one decision is fixed: capability filter -> time_cap
+#     -> time_policy -> fallback_strategy ordering. Filtering first, so a trace
+#     can never show a promotion that a later filter silently removed.
+enabled: true
+
+# Kanban-dispatch mode — how the pre_kanban_dispatch hook treats each board
+# card (full semantics in the section comment of __init__.py).
+#   enabled: true (or the whole section absent) = SHADOW mode, the default:
+#     every dispatched card is routed and the decision recorded in the durable
+#     trace, but the hook returns None, so the dispatcher behaves as if no hook
+#     subscribed. This is the measurement mode — shadow_gate_rate reads it.
+#   enabled: false = LIVE mode: the same hook also RETURNS {"model", "provider"}
+#     for the decisions dispatch may apply (the head of the planned chain), so
+#     the router takes control of the model each card's worker runs on. Live
+#     entries are written with shadow: False and never count in the gate.
+# The router master switch `enabled` above gates BOTH modes: false means no
+# routing and no trace at all.
+#
+# THE ROLE IS AN INPUT ON THIS PATH, NOT AN OUTPUT. Dispatch cannot move a
+# worker's role — the hook applies only model and provider — so a rule's
+# `then.profile` is not a destination here, just a note about the role the policy
+# had in mind. A decision whose profile differs from the card's assignee still
+# applies its MODEL half, and the trace records cause=role_out_of_scope. Until
+# 2026-08-26 such a decision was refused whole, and on a board whose cards ran as
+# one profile while every rule named another that came to 135 of 158 decisions
+# contributing nothing at all.
+#
+# A rule that must fire for one role only says so on the input side, where a role
+# actually lives:
+#
+#   when:
+#     keywords: {contains: audit}
+#     assignee: {eq: reviewer}
+#
+# `assignee` is an injected feature (signals.INJECTED_FEATURE_NAMES), like the
+# clock: absent wherever no role was fixed, so a role-scoped row is inert on the
+# delegation path instead of matching arbitrarily there.
+shadow:
+  enabled: true
+
+# Stage 1 classifier. It sits on the critical path of EVERY delegation, so it
+# gets a chain rather than a single model: one outage on a lone classifier sends
+# every ambiguous task to the heuristic.
+classifier:
+  # Compatibility mirror of chain[0], and the ONLY pair today's runner reads
+  # (__init__._make_classify_fn, RouterService.status). Keep these two keys
+  # byte-equal to chain[0] or the classifier runs on a different rail than the
+  # chain declares.
+  model: claude-haiku-5.5
+  provider: copilot
+  # Declarative today: the flat pair above is what dispatches, and this is the
+  # documented second hop for the chain-aware runner.
+  # PROPOSAL (card t_a7baaba6, NOT applied to the live router.yaml): the
+  # classifier leaves zai, which hosts the T1/T2 primaries, for copilot, which no
+  # tier primary uses. openai-codex is deliberately absent from this chain: it
+  # hosts the T3/T4 primaries. All three ids exist in the provider cache.
+  chain:
+  - model: claude-haiku-5.5
+    provider: copilot
+    billing_mode: plan
+  - model: gpt-5.4-mini
+    provider: copilot
+    billing_mode: plan
+  - model: deepseek-v4-flash
+    provider: deepseek
+    billing_mode: metered
+  # Both hops down: fall back to the deterministic Stage-0 heuristic rather than
+  # failing the delegation. Never point a classifier hop at a T3/T4 elo — that
+  # spends a hard-task rail on a 128-token label.
+  on_total_failure: heuristic
+  temperature: 0
+  max_tokens: 128
+  # One budget has to cover two sequential hops.
+  timeout_seconds: 15
+# Last-resort routing when nothing else resolves. This IS the T1 chain,
+# duplicated on purpose: fail_safe must stay readable by a caller that has no
+# tier table (rules.lint does not inspect it; RouterService._validate_fail_safe
+# only checks its shape). Keep it in step with T1 by hand.
+fail_safe:
+  profile: coder
+  model: glm-5.3-flash
+  provider: zai
+  billing_mode: plan
+  fallback:
+  - model: gpt-5.6-luna
+    provider: openai-codex
+    billing_mode: subscription
+  - model: mimo-v2.5
+    provider: xiaomi
+    billing_mode: metered
+blocklist:
+  # Yours to fill: [{model, provider, reason}, ...]. Shipped empty.
+  manual_ban: []
+  # Union of every tier member in tier order (T1 -> T4), deduplicated, first
+  # appearance wins. Blocklist.fallback_for() walks this list POSITIONALLY, so
+  # the order encodes "next cheapest thing that is not the model that just
+  # failed". Regenerate it whenever `tiers` changes, or a banned model hops to a
+  # rail no tier declares.
+  fallback_chain:
+  - glm-5.3-flash
+  - gpt-5.6-luna
+  - mimo-v2.5
+  - deepseek-v4-flash
+  - gpt-5.6-terra
+  - deepseek-v4-pro
+  - glm-5.3
+  - gpt-5.5
+  # Trips a rail out of rotation after repeated failures, with exponential
+  # backoff between retries. Defaults are conservative; keep the keys even if you
+  # retune the numbers.
+  auto_breaker:
+    enabled: true
+    threshold: 5
+    window_seconds: 600
+    base_cooldown_seconds: 60
+    max_cooldown_seconds: 900
+    backoff_multiplier: 2.0
+# The compaction model + fallback queue. This is a DECLARATIVE choice: it is
+# written to router.yaml through the same /plan + /apply hot path as everything
+# above, linted here, and only made EFFECTIVE when the console fires the
+# RESTART-class apply (POST /apply action=compaction), which resolves it into
+# ~/.hermes/config.yaml under auxiliary.compression.{provider,model,base_url,
+# fallback_chain} and hands the candidate to the safe-restart dead-man switch.
+#
+#   provider   who runs the compaction model.
+#   model      the compaction model. It must exist in the capability registry —
+#              the write is REFUSED otherwise, because compacting on an unknown
+#              id fails exactly when the conversation is already too large to
+#              carry (the worst moment a misconfiguration can pick).
+#   base_url   optional custom endpoint (omit to use the provider's default).
+#   fallback_mode   "standalone" (this block carries its own `fallback_chain`)
+#              OR "tier:<NAME>" — a REFERENCE to that tier's queue, resolved at
+#              apply time, never copied here. One authority per fact: edit the
+#              tier and the compaction fallback follows in the same breath. A
+#              tier deleted AFTER this block is written is refused by name at
+#              apply time, never silently skipped.
+#   required_provider_context_window   optional floor (tokens): when set, the
+#              chosen model's registry context_window must clear it or the
+#              write is refused. Left out below because the floor is a
+#              workload judgement, not a default.
+#
+# "usar a fila do T1" below resolves to glm-5.3-flash -> gpt-5.6-luna -> mimo-v2.5
+# (the tier primary plus its two fallback hops), the same queue T1 routes on.
+compaction:
+  provider: zai
+  model: glm-4.5-flash
+  fallback_mode: tier:T1
+# Watchdog params live in config.yaml: plugins.entries.hermes-smart-router.watchdog
+# Table 1 — ordered, FIRST MATCH WINS. Order is severity-descending after the
+# one narrow row, so a task that trips two rules lands on the stronger tier.
+# rules.lint rejects a config where an earlier row's `when` always subsumes a
+# later row's, so this order is load-bearing: `standard-implementation`
+# (has_code) MUST stay last, because it shares the has_code clause with
+# `trivial-mechanical-edit` and would otherwise swallow every narrower row.
+# A rule can carry `enabled: false` to take it out of first-match without
+# deleting it: the matcher skips it, it shadows nothing and is shadowed by
+# nothing, and the console's inspector offers the switch on each rule row.
+rules:
+# Narrowest row first: three clauses, and the only row that can reach T1.
+- id: trivial-mechanical-edit
+  status: stable
+  when:
+    verb_class:
+      eq: trivial
+    has_code:
+      eq: true
+    size_lines:
+      lte: 40
+  then:
+    profile: coder
+    model: T1
+# An audit/adversarial-review ask outranks everything below it: a "review" that
+# misses a bug is worse than an over-spent T4 call. Distinct from
+# `review-request` further down — "audit" names the adversarial job and buys the
+# strongest tier outright, while a plain "review" asks the classifier how hard
+# the review actually is.
+- id: adversarial-review
+  status: stable
+  when:
+    keywords:
+      contains: audit
+  then:
+    profile: reviewer
+    model: T4
+- id: hard-verbs
+  status: stable
+  when:
+    verb_class:
+      eq: hard
+  then:
+    profile: coder
+    model: T3
+# Conditional routing on the CLOCK — shipped COMMENTED OUT so the mechanism is
+# discoverable from this file, and because enabling it is decision 3 above.
+#
+# `utc_hour` (0-23) and `utc_weekday` (0 = Monday .. 6 = Sunday) are INJECTED
+# features: signals.extract() never produces them, the caller adds them at the
+# edge. A `when` field absent from the feature vector never matches, so this row
+# is INERT whenever no clock was supplied — it does not match spuriously and it
+# does not raise. No clock means no time-based routing, not arbitrary
+# time-based routing.
+#
+# The bounds are written against the real half-open window: `gte: 6` with
+# `lt: 10` is 06:00 through 09:59 UTC, exactly the deepseek/zai overlap.
+# `lte: 10` would be WRONG — hour 10 already bills at base.
+# Keep this row BEFORE huge-context-read: it is the narrower row (it adds the
+# hour clause) and first match wins, so behind huge-context-read it would only
+# ever see the 200k-400k band.
+# Enabling it trades capability for price BY DESIGN: if you keep `model: T1`,
+# give T1 a `requirements.min_context` floor first, or point the row at T2 — a
+# 200k-token read on a chain with no context floor is a different failure than
+# an expensive one.
+# - id: defer-heavy-work-off-peak
+#   status: stable
+#   when:
+#     utc_hour:
+#       gte: 6
+#       lt: 10
+#     est_input_tokens:
+#       gt: 200000
+#   then:
+#     profile: coder
+#     model: T1
+# Conditional routing on CONTEXT. est_input_tokens is a signals.py estimate, not
+# a tokenizer count — the 400_000 floor is deliberately well under T3's
+# min_context requirement (200_000) times two, so an underestimate still fits.
+- id: huge-context-read
+  status: stable
+  when:
+    est_input_tokens:
+      gt: 400000
+  then:
+    profile: coder
+    model: T3
+- id: cross-file-or-protocol
+  status: stable
+  when:
+    num_files:
+      gte: 3
+  then:
+    profile: coder
+    model: T3
+# Conditional routing on CAPABILITY. This row picks only the TIER; the capability
+# filter is what drops elos in that tier's chain which cannot see an image.
+# Do not "fix" this by pointing the row at a vision model directly — that
+# re-hardcodes a model into Table 1.
+# IT ONLY STARTED PAYING FOR ITSELF ON 2026-08-27. While T2's primary was
+# glm-5.3 (vision False) the filter dropped it on every image request, so a
+# screenshot skipped the plan rail and billed dollars on the subscription seat —
+# the row routed correctly and cost money doing it. T2's primary is now
+# glm-5.3-flash, natively multimodal, so the filter has nothing to drop and image
+# work stays on an allowance already bought. The row did not change; the roster
+# under it did, which is the whole argument for routing on capability instead of
+# on a model name.
+- id: vision-required
+  status: stable
+  when:
+    needs_vision:
+      eq: true
+  then:
+    profile: coder
+    model: T2
+# The only row that hands the MODEL choice to the classifier while fixing the
+# ROLE. It has to stay ahead of standard-implementation: signals marks most prose
+# about a PR as has_code, so behind that row it would never fire again.
+- id: review-request
+  status: stable
+  when:
+    keywords:
+      contains: review
+  then:
+    profile: reviewer
+    action: classify
+# Broadest row, therefore last: any remaining code-shaped task is standard work.
+- id: standard-implementation
+  status: stable
+  when:
+    has_code:
+      eq: true
+  then:
+    profile: coder
+    model: T2
+# Nothing in Table 1 matched: ask the Stage 1 classifier rather than guessing a
+# tier. This is the only route that costs an extra model call.
+default:
+  action: classify
+# Table 2 — tier definitions. Each entry is primary + two fallback hops.
+#
+# Deliberately ABSENT, with the reason, because an operator will otherwise add
+# them back:
+#   glm-5   — NOT Coding-Plan-eligible; a plan key cannot call it at all, so it
+#             would be a metered surprise on a plan-only rail.
+#   glm-5.2 — the plan silently auto-routes this id to glm-5.3, so naming it here
+#             only obscures which model actually ran.
+#   glm-4.7, glm-5-turbo — the SAME trap, learned the expensive way. The plan
+#             dropped both from its credit table and now auto-routes them to
+#             glm-5.3-flash. This config named glm-4.7 in four places (T1
+#             primary, the classifier pair, fail_safe, blocklist.fallback_chain)
+#             after that change: every request succeeded, glm-5.3-flash answered,
+#             and the trace, the decision log and the console all said glm-4.7.
+#             A vendor alias is not a rail. Name what runs.
+#   *:free OpenRouter ids — either unfunded (402 on every call) or nonexistent as
+#             a ":free" variant (404). Verify an id exists before hopping to it.
+tiers:
+  # T1 — trivial/mechanical. Plan-covered primary, then the cheapest
+  # subscription seat, then a metered rail on a third vendor.
+  #
+  # The primary is glm-5.3-flash because that is what the plan runs for this
+  # tier whatever id is written here (it replaced glm-4.7, which used to be
+  # named). It is also the better of the two: 8 output credits against
+  # glm-4.7's old 16, roughly 3x the weekly token allowance, and a strictly
+  # stronger model — the vendor's own DeepSWE line is 63.4 against GLM-5.2's
+  # 46.2, and glm-4.7 is a generation behind GLM-5.2. Trivial work getting a
+  # cheaper AND stronger rail is not a trade; it is the vendor moving.
+  T1:
+    model: glm-5.3-flash
+    provider: zai
+    billing_mode: plan
+    fallback:
+    - model: gpt-5.6-luna
+      provider: openai-codex
+      billing_mode: subscription
+    - model: mimo-v2.5
+      provider: xiaomi
+      billing_mode: metered
+    # sequential = primary, then hop 1, then hop 2, in this order.
+    fallback_strategy: sequential
+    # Switch to `random` (and drop `sequential`) to spread load across rails with
+    # INDEPENDENT quotas instead of hammering one until it 429s. pin_primary:
+    # false lets the primary be shuffled into the draw; true keeps it first and
+    # randomizes only the fallbacks. Random takes an injected random.Random, so
+    # rules.py stays pure: same inputs plus same rng produce the same chain.
+    # fallback_strategy: random
+    # pin_primary: false
+    # Trivial work is never worth a peak-rate token: a 40-line mechanical edit
+    # buys nothing extra from an hour that costs double. 1.5 sits between the
+    # flat 1.0 a non-windowed rail bills and the 2.0 deepseek/zai peak, so it
+    # excludes any DOLLAR-BILLED rail currently in a peak window while admitting
+    # every flat rail (and xiaomi's 0.8x discount, which is cheaper than flat).
+    # A multiplier, not a dollar ceiling, so it survives a list-price change.
+    # ON THIS ROSTER IT REMOVES NOTHING AT ANY HOUR (verified over all 168 hours
+    # of the week, not sampled), and that is expected: max_multiplier is a DOLLAR
+    # ceiling, so it only evicts metered/subscription elos. glm-5.3-flash is
+    # plan-covered — its 2.0x doubles a CREDIT draw off an allowance already
+    # bought and adds no dollars, so the cap cannot evict it and
+    # capabilities.apply_time_cap reports it as cap_exempt instead, while
+    # gpt-5.6-luna is flat and mimo-v2.5's only window is a discount. What the
+    # TRACE shows for that is `multipliers: {glm-5.3-flash: 2.0}` — rules.plan_chain
+    # does not forward cap_exempt, so do not expect that key in a plan. Keep the
+    # cap anyway: it is already in force over both hops that can bill money, and
+    # the day a dollar-billed hop with an expensive window lands here it is capped
+    # from the first request.
+    # If a future edit leaves EVERY hop capped, the cap SELF-BYPASSES: the
+    # original chain is restored and the trace carries time_cap_bypassed: true.
+    # A cost control must never be able to cause an outage.
+    time_cap:
+      max_multiplier: 1.5
+  # T2 — standard work, and the tier that carries the most traffic. This is the
+  # GENERAL-PURPOSE rail: whatever the classifier cannot place elsewhere lands
+  # here, so its primary is the single most consequential name in this file.
+  #
+  # It is glm-5.3-flash, not the flagship glm-5.3, and the trade is measured
+  # rather than assumed. Cost, in the unit this install actually pays: 8 output
+  # credits against 24, i.e. 3x the work off the same allowance (the vendor's own
+  # weekly estimate is 146-292M tokens against 48-97M on a Lite plan). In dollars,
+  # for a plan-less operator, 0.15/0.50 against 1.40/4.40 — 9.3x and 8.8x.
+  # Quality, from the vendor's own launch tables (self-reported, one harness, not
+  # an independent head-to-head — read them as a direction, not a measurement):
+  #   Flash BEHIND:  Terminal-Bench 2.1 84.3 vs 88.2 · DeepSWE v1.1 63.4 vs 66.9
+  #                  Agents' Last Exam 26.3 vs 28.5 · HLE w/ tools 55.3 vs 62.5
+  #   Flash AHEAD:   Toolathlon Verified 78.4 vs 73.0 · AutomationBench 48.8 vs
+  #                  48.2 · GDPval-AA v2 1773 vs 1769 Elo
+  # Under four points behind on the two coding rows, ahead on the tool-use and
+  # automation rows, at a third of the credits. For "single file, standard
+  # pattern" work — what the T2 anchor in router/fixtures/anchors.yaml actually
+  # describes — that is the right side of the trade. The flagship's clear win is
+  # HLE-with-tools and long trajectories, which is T3/T4 work, and glm-5.3 is
+  # still the third hop of both. Nothing lost it, it moved up the ladder.
+  #
+  # AND IT CAN SEE. The `vision-required` row above routes here, and until this
+  # change T2's primary had vision False, so every screenshot skipped the plan
+  # rail and billed dollars on the subscription seat. Flash is natively
+  # multimodal, so that row now works the way it was written: the capability
+  # filter has nothing to drop, and image work stays on an allowance already
+  # bought. That was a standing open question in this file; the answer arrived as
+  # a side effect of the cheaper primary rather than as a routing edit.
+  #
+  # T1 AND T2 NOW SHARE A PRIMARY, deliberately and not by accident. There is
+  # exactly one plan rail below the flagship, so the cheapest correct answer for
+  # trivial work and for standard work is the same model. What still separates
+  # the tiers is everything BELOW that primary, and it is all about money:
+  #   T1 refuses a peak-rate dollar (`time_cap: 1.5`) and falls to the cheapest
+  #      metered model on the roster, mimo-v2.5 at 0.28/1M out.
+  #   T2 has no ceiling, reorders its tail by price at the hour, and falls to a
+  #      stronger metered rail, deepseek-v4-flash at 0.66.
+  # So the ladder's rungs are now the FALLBACK ECONOMICS and the time policy, not
+  # the primary. If a future roster gives the plan a second rung, this is the
+  # first place to spend it.
+  #
+  # The two hops behind it are on other billing rails entirely: one vendor's plan
+  # quota is one failure domain, so a second zai id here would buy nothing on the
+  # day zai is the thing that is down. That is also why glm-5.3 is NOT parked here
+  # as a fallback despite being the stronger model — a fallback answers an outage,
+  # and it would share the outage.
+  T2:
+    model: glm-5.3-flash
+    provider: zai
+    billing_mode: plan
+    fallback:
+    - model: gpt-5.6-luna
+      provider: openai-codex
+      billing_mode: subscription
+    - model: deepseek-v4-flash
+      provider: deepseek
+      billing_mode: metered
+    # The busiest tier is where a per-request price comparison pays for itself.
+    # cheapest_now orders the capability-eligible chain by ascending EFFECTIVE
+    # OUTPUT price at the injected time — output, because output tokens dominate
+    # agent cost — with ties keeping declared order, so the ordering is stable
+    # and the order written here still expresses operator preference.
+    # What it trades on is DEEPSEEK'S WINDOW ALONE, not the deepseek/zai overlap:
+    # the plan rail is the pinned primary, so zai's 2.0x never reaches the tail.
+    # That tail is one flat $1.20/1M-out seat against one metered rail at $0.66
+    # base and $1.32 in peak, so its order is a function of deepseek-v4-flash's
+    # multiplier and nothing else:
+    #   inside deepseek's peak -> [gpt-5.6-luna $1.20, deepseek-v4-flash $1.32]
+    #   outside it             -> [deepseek-v4-flash $0.66, gpt-5.6-luna $1.20]
+    # Verified over ALL 168 HOURS of the week: flipped for 49 of them (29.17%) —
+    # 01:00-04:00 AND 06:00-10:00 UTC, EVERY day, i.e. deepseek's two declared
+    # windows. It does not change at the weekend when zai stops peaking, which is
+    # how you can see zai was never the cause.
+    # pin_primary: true deliberately: glm-5.3-flash is plan-covered, so while the
+    # plan lasts it is free AT THE MARGIN and no dollar price beats it. That is
+    # the whole reason now. It used to rest on a second one — the primary
+    # published no per-token price, so ranking it needed the billing_mode bucket
+    # rather than a number — and 2026-08-27 killed it: every plan id is priced
+    # now. Without the pin, a dollar reading would put this primary at 0.50 out,
+    # behind metered rails at 0.28, and the flagship it replaced at 4.40 behind
+    # both hops it should lead. cheapest_now buckets by billing_mode and never by
+    # whether a price happens to be published, so the pin only makes explicit what
+    # the bucket already decides; the day that field is read as dollars anyway, the
+    # pin is what stops the busiest tier from ordering itself upside down.
+    # The TAIL is what gets ordered by what is genuinely cheapest at the moment
+    # of the request.
+    # With no clock injected this degrades to sequential, i.e. the order above.
+    fallback_strategy: cheapest_now
+    pin_primary: true
+  # T3 — hard work. Worked example of a per-tier floor: every elo in this chain
+  # must advertise at least 200_000 tokens of context, so the capability filter
+  # drops any future hop that cannot hold a large repo read. All three current
+  # members clear it with room (terra 1.05M, deepseek-v4-pro 1.048M, glm-5.3 1M).
+  T3:
+    model: gpt-5.6-terra
+    provider: openai-codex
+    billing_mode: subscription
+    fallback:
+    - model: deepseek-v4-pro
+      provider: deepseek
+      billing_mode: metered
+    - model: glm-5.3
+      provider: zai
+      billing_mode: plan
+    fallback_strategy: sequential
+    requirements:
+      min_context: 200000
+    # TIME POLICY. Why it is here: the two rails behind the primary have PARTLY
+    # overlapping expensive windows — deepseek 2.0x at 01:00-04:00 and 06:00-10:00
+    # UTC daily, zai 2.0x at 06:00-10:00 UTC Mon-Fri — so where they overlap BOTH
+    # hops bill double at once. On the reference install (UTC-03) that is
+    # 03:00-07:00 local, the overnight unattended window, so the traffic nobody is
+    # watching is the traffic paying double on both rails. T3/T4 are the expensive
+    # tiers, which is why the knob is here.
+    # WHAT IT DOES, over ALL 168 HOURS of the week — the three cases partition it:
+    #   119h (70.8%)  nothing matches -> declared order, both lists empty.
+    #    29h (17.3%)  deepseek peaks ALONE, so the pair separates: the chain
+    #                 becomes [gpt-5.6-terra, glm-5.3, deepseek-v4-pro] with
+    #                 `demoted: [deepseek-v4-pro]`. That is 01:00-04:00 UTC daily
+    #                 plus 06:00-10:00 UTC at the WEEKEND, when zai's weekday-only
+    #                 window is shut. The second hop of every hard task changes
+    #                 model AND billing rail in those hours.
+    #    20h (11.9%)  both peak together (06:00-10:00 UTC Mon-Fri) -> the
+    #                 permutation is the IDENTITY, because demotion preserves
+    #                 relative order and both named providers already occupy the
+    #                 trailing two slots. `demoted: []` with
+    #                 `peak_priced: [deepseek-v4-pro, glm-5.3]`.
+    # Read `peak_priced` as the cost signal and `demoted` as the order signal.
+    # Verify any claim like this by sweeping the week, never at one hour: an
+    # earlier version of this comment said the shape "REORDERS NOTHING" on the
+    # strength of 07:00Z and 15:00Z, and both of those miss all 29 hours.
+    # To make the demotion bite in the remaining 20 hours too, add a hop on a
+    # provider with no expensive window (xiaomi's mimo-v2.5-pro is flat apart from
+    # a 0.8x discount and clears the 200_000 floor at 1.05M); the pair then
+    # demotes behind it.
+    # Keep demotion rather than removal: a demoted rail beats no rail, the same
+    # invariant the capability filter holds. Outside deepseek's two windows AND
+    # zai's one, nothing matches and both lists are empty.
+    time_policy:
+      avoid_peak: [deepseek, zai]
+  # T4 — adversarial. Same two hops as T3 by design: if the strongest rail is
+  # down, a hard-task answer from the T3 chain beats no answer.
+  #
+  # This tier used to name `us.anthropic.claude-opus-5` on a `copilot-acp` rail.
+  # That was host-specific (an ACP bridge gated behind one operator's Mac) and
+  # unknown to the capability registry, so it is gone. If you hold an Anthropic
+  # key, `claude-opus-5` @ `anthropic` IS registered (metered, vision, 1M
+  # context) and is a sound drop-in for either hop below.
+  T4:
+    model: gpt-5.5
+    provider: openai-codex
+    billing_mode: subscription
+    fallback:
+    - model: deepseek-v4-pro
+      provider: deepseek
+      billing_mode: metered
+    - model: glm-5.3
+      provider: zai
+      billing_mode: plan
+    # Same policy as T3, same reason, and — because the chain shape below the
+    # primary is identical — the same measured 119h/29h/20h split, verified the
+    # same way. T4 just costs the most per request, so a 2x here hurts most in
+    # absolute terms. Keep the two in step: the chains are intentionally identical
+    # below the primary, so a divergence between their time policies is a bug, not
+    # a deliberate difference.
+    time_policy:
+      avoid_peak: [deepseek, zai]

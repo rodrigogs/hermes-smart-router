@@ -924,8 +924,41 @@ def lint_warnings(config: Dict[str, Any]) -> List[str]:
         warnings.extend(_time_warnings(tn, tier, chain))
 
     warnings.extend(_fallback_chain_warnings(config, tiers_cfg))
+    warnings.extend(_classifier_provider_warnings(config, tiers_cfg))
 
     return warnings
+
+
+def _classifier_provider_warnings(
+    config: Dict[str, Any], tiers_cfg: Dict[str, Any]
+) -> List[str]:
+    """The Stage 1 classifier's provider must not be a tier PRIMARY's provider.
+
+    The classifier sits on the critical path of every delegation; sharing a
+    provider with the primaries means one quota or outage takes out routing and
+    the work it routes at once. Advisory (not a write-gate error) so a config
+    that knowingly keeps one rail still applies. Checks the flat pair and
+    chain[0], the only hops that dispatch today.
+    """
+    clf = config.get("classifier")
+    if not isinstance(clf, dict):
+        return []
+    primaries = {
+        str(t["provider"])
+        for t in tiers_cfg.values()
+        if isinstance(t, dict) and isinstance(t.get("provider"), str)
+    }
+    hops = [("classifier", clf)]
+    chain = clf.get("chain")
+    if isinstance(chain, list) and chain and isinstance(chain[0], dict):
+        hops.append(("classifier.chain[0]", chain[0]))
+    return [
+        f"{label}: provider '{h['provider']}' is also a tier primary provider "
+        f"({', '.join(sorted(primaries))}) — classifier shares a failure domain "
+        f"with the primaries"
+        for label, h in hops
+        if isinstance(h.get("provider"), str) and h["provider"] in primaries
+    ]
 
 
 def _lint_blocklist_shape(config: Dict[str, Any]) -> List[str]:
