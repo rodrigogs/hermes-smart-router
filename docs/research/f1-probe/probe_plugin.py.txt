@@ -1,0 +1,132 @@
+"""Ephemeral F1 spike probe. Lives only in the f1spike profile."""
+import json
+import os
+import time
+import traceback
+from pathlib import Path
+
+HOME = Path(os.environ.get("HERMES_HOME", "."))
+LOG = HOME / "f1probe.jsonl"
+CFG = HOME / "f1probe.json"
+STATE = {"pending_steer": False, "steered": 0, "blocked_ext": False, "acted": set()}
+_ctx = None
+
+
+def _scenario():
+    try:
+        return json.loads(CFG.read_text()).get("scenario", "observe")
+    except Exception:
+        return "observe"
+
+
+def _summ(v):
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= 120 else f"<str len={len(v)}> {v[:60]!r}..."
+    if isinstance(v, (list, tuple)):
+        return f"<{type(v).__name__} len={len(v)}>"
+    if isinstance(v, dict):
+        return {k: _summ(x) for k, x in v.items()} if len(v) <= 12 else f"<dict keys={list(v)[:15]}>"
+    return f"<{type(v).__name__}>"
+
+
+def _log(ev, **kw):
+    with LOG.open("a") as f:
+        f.write(json.dumps({"t": round(time.time(), 2), "pid": os.getpid(), "ev": ev, **kw}, default=str) + "\n")
+
+
+def _guard(fn):
+    def w(**kw):
+        try:
+            return fn(**kw)
+        except Exception:
+            _log("probe_error", tb=traceback.format_exc()[-800:])
+    return w
+
+
+@_guard
+def pre_api(**kw):
+    n = kw.get("api_call_count")
+    _log("pre_api_request", scenario=_scenario(), keys=sorted(kw), kw={k: _summ(v) for k, v in kw.items()},
+         env={k: os.environ.get(k) for k in ("HERMES_MAX_ITERATIONS", "HERMES_KANBAN_TASK", "HERMES_KANBAN_RUN_ID", "HERMES_SESSION_SOURCE")})
+    sc = _scenario()
+    if sc == "steer" and n == 2 and "steer" not in STATE["acted"]:
+        STATE["acted"].add("steer")
+        STATE["pending_steer"] = True
+        _log("steer_armed", at=n)
+    if sc == "inject" and n == 1 and "inject" not in STATE["acted"]:
+        STATE["acted"].add("inject")
+        cli = None
+        try:
+            cli = _ctx._manager._cli_ref
+        except Exception as e:
+            cli = f"err {e}"
+        try:
+            r = _ctx.inject_message("[F1 inject probe] reply with the word INJECTED-OK", role="user")
+        except Exception as e:
+            r = f"EXC {type(e).__name__}: {e}"
+        _log("inject_result", cli_ref=type(cli).__name__ if cli is not None else None, ret=r)
+
+
+@_guard
+def post_api(**kw):
+    n = kw.get("api_call_count")
+    _log("post_api_request", keys=sorted(kw), kw={k: _summ(v) for k, v in kw.items()})
+    sc = _scenario()
+    if sc in ("block", "block_all") and n == 2 and "block" not in STATE["acted"]:
+        STATE["acted"].add("block")
+        from hermes_cli import kanban_db
+        tid = os.environ["HERMES_KANBAN_TASK"]
+        rid = int(os.environ["HERMES_KANBAN_RUN_ID"])
+        with kanban_db.connect_closing() as conn:
+            ok = kanban_db.block_task(conn, tid, reason="[f1probe] external block test", kind="needs_input", expected_run_id=rid)
+        STATE["blocked_ext"] = True
+        _log("external_block", ok=ok, task=tid, run=rid)
+    if sc == "send" and n == 1 and "send" not in STATE["acted"]:
+        STATE["acted"].add("send")
+        import subprocess
+        for tgt in ("telegram", "whatsapp"):
+            t0 = time.time()
+            try:
+                p = subprocess.run(["hermes", "send", "-t", tgt, "[F1 spike test, ignore] hermes send from headless kanban worker -> " + tgt, "--json"],
+                                   capture_output=True, text=True, timeout=90)
+                r = f"rc={p.returncode} out={p.stdout[-400:]!r} err={p.stderr[-400:]!r}"
+            except Exception as e:
+                r = f"EXC {type(e).__name__}: {e}"
+            _log("send_cli_result", target=tgt, secs=round(time.time() - t0, 2), ret=r)
+        try:
+            from tools import send_message_tool as smt
+            _log("send_tool_registered", registered=bool(__import__("tools.registry", fromlist=["registry"]).registry.get_entry("send_message")) if hasattr(__import__("tools.registry", fromlist=["registry"]).registry, "get_entry") else "n/a")
+        except Exception as e:
+            _log("send_tool_registered", err=str(e))
+        for tgt in ("telegram", "whatsapp"):
+            t0 = time.time()
+            try:
+                r = _ctx.dispatch_tool("send_message", {"action": "send", "target": tgt,
+                                                        "message": f"[F1 spike test, ignore] send_message from headless kanban worker -> {tgt}"})
+            except Exception as e:
+                r = f"EXC {type(e).__name__}: {e}"
+            _log("send_result", target=tgt, secs=round(time.time() - t0, 2), ret=str(r)[:600])
+
+
+@_guard
+def pre_tool(**kw):
+    tn = kw.get("tool_name", "")
+    out = None
+    if STATE["pending_steer"] and not tn.startswith("kanban_"):
+        STATE["pending_steer"] = False
+        STATE["steered"] += 1
+        out = {"action": "block", "message": "[alignment steer] STOP: before continuing, say the word STEERED and then re-issue the same tool call."}
+    elif STATE["blocked_ext"] and (_scenario() == "block_all" or not tn.startswith("kanban_")):
+        out = {"action": "block", "message": "card blocked, finish now"}
+    _log("pre_tool_call", tool=tn, keys=sorted(kw), decision=out and out["action"], task_id=kw.get("task_id"))
+    return out
+
+
+def register(ctx):
+    global _ctx
+    _ctx = ctx
+    ctx.register_hook("pre_api_request", pre_api)
+    ctx.register_hook("post_api_request", post_api)
+    ctx.register_hook("pre_tool_call", pre_tool)
