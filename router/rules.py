@@ -496,6 +496,7 @@ def lint(config: Dict[str, Any]) -> List[str]:
     errors.extend(_lint_tier_shapes(tiers_cfg))
     errors.extend(_lint_global_price_windows(config))
     errors.extend(_lint_blocklist_shape(config))
+    errors.extend(_lint_alignment(config))
 
     # The default is the route EVERY fall-through takes, so an unresolvable tier
     # alias there misroutes more traffic than any single rule can. The identical
@@ -591,6 +592,191 @@ def lint(config: Dict[str, Any]) -> List[str]:
         errors.append(finding["message"])
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# alignment: block (session-alignment hook, docs/research/2026-10-session-alignment-hook.md §5)
+# ---------------------------------------------------------------------------
+# Closed vocabulary, table-driven: every key the spec names has ONE entry, and a
+# key outside its table fails the lint (a typo is a dead knob, not a setting).
+# Nothing reads this block yet (F4+); the lint only keeps the schema honest.
+
+_ALIGN_MODES = ("shadow", "alert", "enforce")
+_ALIGN_SCOPES = ("kanban", "chat", "subagent", "delegate_profile")
+_ALIGN_ALERT_ON = ("block", "adjust", "shadow_block")
+_ALIGN_DELIVER = ("auto", "steer", "pre_tool_call")
+_ALIGN_BILLING = ("free", "metered", "plan", "premium", "subscription")
+_ALIGN_TIERS = ("T1", "T2", "T3", "T4")
+
+
+def _al_bool(v: Any) -> Optional[str]:
+    return None if isinstance(v, bool) else "must be boolean"
+
+
+def _al_int(lo: int, hi: Optional[int] = None) -> Callable[[Any], Optional[str]]:
+    def check(v: Any) -> Optional[str]:
+        if isinstance(v, bool) or not isinstance(v, int) or v < lo or (hi is not None and v > hi):
+            return f"must be an integer >= {lo}" + (f" and <= {hi}" if hi is not None else "")
+        return None
+    return check
+
+
+def _al_num(lo: float, hi: Optional[float] = None) -> Callable[[Any], Optional[str]]:
+    def check(v: Any) -> Optional[str]:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < lo or (
+            hi is not None and v > hi
+        ):
+            return f"must be a number >= {lo}" + (f" and <= {hi}" if hi is not None else "")
+        return None
+    return check
+
+
+def _al_enum(vals: Tuple[str, ...]) -> Callable[[Any], Optional[str]]:
+    def check(v: Any) -> Optional[str]:
+        return None if v in vals else f"must be one of {', '.join(vals)}"
+    return check
+
+
+def _al_enum_list(vals: Tuple[str, ...]) -> Callable[[Any], Optional[str]]:
+    def check(v: Any) -> Optional[str]:
+        if not isinstance(v, list) or not v or any(x not in vals for x in v):
+            return f"must be a non-empty list drawn from {', '.join(vals)}"
+        return None
+    return check
+
+
+def _al_str(v: Any) -> Optional[str]:
+    return None if isinstance(v, str) and v.strip() else "must be a non-empty string"
+
+
+def _al_str_list(v: Any) -> Optional[str]:
+    if not isinstance(v, list) or not v or any(_al_str(x) for x in v):
+        return "must be a non-empty list of non-empty strings"
+    return None
+
+
+def _al_null_str(v: Any) -> Optional[str]:
+    return None if v is None or isinstance(v, str) else "must be null or a string"
+
+
+def _al_pct_list(v: Any) -> Optional[str]:
+    if (
+        not isinstance(v, list)
+        or not v
+        or any(isinstance(x, bool) or not isinstance(x, int) or not 1 <= x <= 100 for x in v)
+        or any(a >= b for a, b in zip(v, v[1:]))
+    ):
+        return "must be a non-empty strictly ascending list of integers in 1..100"
+    return None
+
+
+def _al_chain(v: Any) -> Optional[str]:
+    """judge.chain: a non-empty list of {model, provider[, billing_mode]} hops."""
+    if not isinstance(v, list) or not v:
+        return "must be a non-empty list"
+    for i, hop in enumerate(v):
+        errs = _lint_align_node(f"[{i}]", hop, _AL_JUDGE_HOP)
+        if errs:
+            return errs[0]
+        if "model" not in hop or "provider" not in hop:
+            return f"[{i}] must declare 'model' and 'provider'"
+    return None
+
+
+_AL_CONF = _al_num(0, 1)
+_AL_TRIGGER: Dict[str, Any] = {
+    "pct": _al_pct_list,
+    "min_iterations": _al_int(1),
+    "goal_turn_pct": _al_int(1, 100),
+    "fallback_max_iterations": _al_int(1),
+    "cooldown_iterations": _al_int(0),
+    "max_evaluations_per_session": _al_int(1),
+}
+_AL_OVERRIDE: Dict[str, Any] = {
+    "enabled": _al_bool,
+    **_AL_TRIGGER,
+    "min_confidence": {"adjust": _AL_CONF, "block": _AL_CONF},
+}
+_AL_JUDGE_HOP: Dict[str, Any] = {
+    "model": _al_str,
+    "provider": _al_str,
+    "billing_mode": _al_enum(_ALIGN_BILLING),
+}
+_AL_SPEC: Dict[str, Any] = {
+    "enabled": _al_bool,
+    "mode": _al_enum(_ALIGN_MODES),
+    "scopes": _al_enum_list(_ALIGN_SCOPES),
+    "trigger": _AL_TRIGGER,
+    "overrides": {
+        "tiers": {t: _AL_OVERRIDE for t in _ALIGN_TIERS},
+        "profiles": {},  # open: keyed by profile name, each entry is _AL_OVERRIDE
+    },
+    "judge": {
+        "chain": _al_chain,
+        "require_distinct_provider": _al_bool,
+        "timeout_seconds": _al_num(0.001),
+        "max_input_tokens": _al_int(1),
+        "max_output_tokens": _al_int(1),
+        "temperature": _al_num(0),
+        "confirm_block_with_second_judge": _al_bool,
+    },
+    "thresholds": {
+        "adjust_min_confidence": _AL_CONF,
+        "block_min_confidence": _AL_CONF,
+        "require_evidence": _al_bool,
+        "adjust_limit": _al_int(0),
+        "allow_direct_block": _al_bool,
+    },
+    "actions": {
+        "adjust": {"deliver": _al_enum(_ALIGN_DELIVER), "comment": _al_bool},
+        "block": {"kanban_block": _al_bool, "comment": _al_bool},
+    },
+    "alert": {
+        "on": _al_enum_list(_ALIGN_ALERT_ON),
+        "channels": _al_str_list,
+        "include_reasons": _al_bool,
+        "include_transcript_excerpt": _al_bool,
+        "quiet_hours": _al_null_str,
+    },
+    "privacy": {
+        "redact": _al_bool,
+        "max_transcript_chars_to_judge": _al_int(1),
+        "allow_providers": _al_str_list,
+    },
+    "budget": {
+        "max_judge_calls_per_day": _al_int(0),
+        "breaker": {"threshold": _al_int(1), "cooldown_seconds": _al_int(1)},
+    },
+    "log": {"path": _al_str},
+}
+
+
+def _lint_align_node(path: str, value: Any, spec: Any) -> List[str]:
+    """Walk ``value`` against ``spec``: dict spec = closed key table, callable = leaf."""
+    if callable(spec):
+        msg = spec(value)
+        return [f"{path} {msg}"] if msg else []
+    if not isinstance(value, dict):
+        return [f"{path} must be a mapping"]
+    errors: List[str] = []
+    for raw_key, sub in value.items():
+        # PyYAML (YAML 1.1) reads a bare `on:` as the boolean True, so the spec's
+        # own `alert.on` arrives as key True. Same key, spelled by the parser.
+        key = "on" if raw_key is True else raw_key
+        if path == "alignment.overrides.profiles":
+            errors.extend(_lint_align_node(f"{path}.{key}", sub, _AL_OVERRIDE))
+        elif key not in spec:
+            errors.append(f"{path}.{key} is not a known alignment key")
+        else:
+            errors.extend(_lint_align_node(f"{path}.{key}", sub, spec[key]))
+    return errors
+
+
+def _lint_alignment(config: Dict[str, Any]) -> List[str]:
+    """Hard-error checks for the top-level ``alignment`` block (absent = fine)."""
+    if "alignment" not in config:
+        return []
+    return _lint_align_node("alignment", config["alignment"], _AL_SPEC)
 
 
 def _shadowed_pairs(rules: List[Any]) -> Iterator[Dict[str, Any]]:

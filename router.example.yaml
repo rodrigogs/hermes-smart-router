@@ -212,6 +212,41 @@ compaction:
   provider: zai
   model: glm-4.5-flash
   fallback_mode: tier:T1
+# Session-alignment hook (docs/research/2026-10-session-alignment-hook.md §5) —
+# OFF by default and shipped COMMENTED OUT: with no `alignment:` key nothing
+# runs. Uncomment to opt in; rules.lint holds every key to a closed vocabulary
+# (an unknown key is a refused write), and `mode: shadow` judges without acting.
+# alignment:
+#   enabled: false
+#   mode: shadow
+#   scopes: [kanban]
+#   trigger:
+#     pct: [60, 85]
+#     min_iterations: 12
+#     cooldown_iterations: 10
+#     max_evaluations_per_session: 3
+#   judge:
+#     chain:
+#     - {model: claude-opus-5.5, provider: copilot, billing_mode: premium}
+#     - {model: gpt-6.1-sol, provider: openai-codex, billing_mode: subscription}
+#     require_distinct_provider: true
+#     timeout_seconds: 90
+#   thresholds:
+#     adjust_min_confidence: 0.6
+#     block_min_confidence: 0.85
+#     require_evidence: true
+#     adjust_limit: 2
+#     allow_direct_block: false
+#   alert:
+#     on: [block]
+#     channels: [telegram]
+#   privacy:
+#     redact: true
+#     allow_providers: [copilot, openai-codex]
+#   budget:
+#     max_judge_calls_per_day: 40
+#   log:
+#     path: alignment.jsonl
 # Watchdog params live in config.yaml: plugins.entries.hermes-smart-router.watchdog
 # Table 1 — ordered, FIRST MATCH WINS. Order is severity-descending after the
 # one narrow row, so a task that trips two rules lands on the stronger tier.

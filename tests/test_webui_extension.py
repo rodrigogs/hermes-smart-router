@@ -1263,6 +1263,11 @@ def test_every_writable_key_has_a_control_that_is_not_the_json_editor():
         )
 
     covered = from_inspector | set(dedicated)
+    # DELIBERATELY JSON-only: the session-alignment block (spec 2026-10-session-alignment-hook
+    # §10 F13) gets no edit controls until F11's shadow-run review is accepted.
+    # Reachable via plan/apply and the Política editor; a form would invite tuning
+    # thresholds nobody has measured yet.
+    covered |= {"alignment"}
     missing = sorted(_HOT_KEYS - covered)
     assert not missing, (
         f"the write gate accepts {missing} and no form on any tab can produce it, "

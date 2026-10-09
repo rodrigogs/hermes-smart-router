@@ -359,7 +359,7 @@ def _is_number(value: Any) -> bool:
 _HOT_KEYS = frozenset(
     {
         "rules", "default", "tiers", "classifier", "fail_safe", "blocklist",
-        "enabled", "price_windows", "compaction",
+        "enabled", "price_windows", "compaction", "alignment",
     }
 )
 
