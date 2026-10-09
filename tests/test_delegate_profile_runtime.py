@@ -1628,7 +1628,10 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         monkeypatch.setattr(_dp, "_REGISTERED_CTX", {})
         ctx = self._Ctx()
         _dp.register(ctx)
-        assert ctx.hooks == ["post_tool_call", "pre_kanban_dispatch"]
+        assert ctx.hooks == [
+            "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
+            "kanban_task_blocked", "on_kanban_worker_exited",
+        ]
 
     def test_an_ordinary_process_still_gets_the_tool(self, monkeypatch):
         monkeypatch.delenv("HERMES_DELEGATE_PROFILE_DISABLE", raising=False)
@@ -1637,7 +1640,10 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         ctx = self._Ctx()
         _dp.register(ctx)
         assert ctx.tools == ["delegate_profile"]
-        assert ctx.hooks == ["post_tool_call", "pre_kanban_dispatch"]
+        assert ctx.hooks == [
+            "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
+            "kanban_task_blocked", "on_kanban_worker_exited",
+        ]
 
     @pytest.mark.parametrize("value", ["0", "", "true", "yes", "2"])
     def test_only_the_exact_documented_value_withholds_it(self, value, monkeypatch):
@@ -1744,7 +1750,10 @@ def test_a_host_without_register_middleware_still_registers_everything_else(monk
     _dp.register(ctx)  # must not raise
 
     assert ctx.tools and ctx.tools[0]["name"] == "delegate_profile"
-    assert [a[0] for a in ctx.hooks] == ["post_tool_call", "pre_kanban_dispatch"]
+    assert [a[0] for a in ctx.hooks] == [
+        "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
+        "kanban_task_blocked", "on_kanban_worker_exited",
+    ]
 
 
 def test_the_middleware_leaves_a_normal_model_untouched(monkeypatch):

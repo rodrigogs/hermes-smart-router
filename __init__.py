@@ -1458,6 +1458,47 @@ def _on_pre_kanban_dispatch(
         return None
 
 
+def _record_kanban_outcome(
+    outcome: str, source: str, task_id: str, run_id: Any, **extra: Any,
+) -> None:
+    """Shared body of the three outcome hooks. Observer only: never raises."""
+    try:
+        if _LOADED_AS_PACKAGE:
+            from .router.outcomes import record_outcome
+        else:  # direct source loading used by the development test harness
+            from router.outcomes import record_outcome
+        record_outcome(task_id, run_id, outcome, source, **extra)
+    except Exception:
+        logger.debug("hermes-smart-router: outcome not recorded for %s", task_id, exc_info=True)
+
+
+def _on_kanban_task_completed(
+    task_id: str = "", run_id: Optional[int] = None, **_kwargs: Any,
+) -> None:
+    """``kanban_task_completed``: the routed card finished."""
+    _record_kanban_outcome("completed", "kanban_task_completed", task_id, run_id)
+
+
+def _on_kanban_task_blocked(
+    task_id: str = "", run_id: Optional[int] = None, **_kwargs: Any,
+) -> None:
+    """``kanban_task_blocked``: the routed card stopped for input or a wall."""
+    _record_kanban_outcome("blocked", "kanban_task_blocked", task_id, run_id)
+
+
+def _on_kanban_worker_exited(
+    task_id: str = "", run_id: Optional[int] = None, outcome: str = "",
+    exit_kind: str = "", exit_code: Any = None, **_kwargs: Any,
+) -> None:
+    """``on_kanban_worker_exited``: a worker died; ``rate_limited`` is a quota wall."""
+    kind = "rate_limited" if "rate_limited" in (outcome, exit_kind) else (
+        outcome or exit_kind or "exited")
+    _record_kanban_outcome(
+        kind, "on_kanban_worker_exited", task_id, run_id,
+        exit_kind=exit_kind, exit_code=exit_code,
+    )
+
+
 def shadow_gate_rate(limit: Optional[int] = None) -> Optional[float]:
     """Fraction of SHADOW card decisions that fell through Stage 0, or None.
 
@@ -2318,6 +2359,10 @@ def register(ctx):
     # switches the SAME hook to live mode, where it also RETURNS the model
     # decision for the dispatcher to apply to that worker's spawn.
     ctx.register_hook("pre_kanban_dispatch", _on_pre_kanban_dispatch)
+    # Outcome observers: join what the router decided to what happened to the card.
+    ctx.register_hook("kanban_task_completed", _on_kanban_task_completed)
+    ctx.register_hook("kanban_task_blocked", _on_kanban_task_blocked)
+    ctx.register_hook("on_kanban_worker_exited", _on_kanban_worker_exited)
 
     # Registration completed — mark this ctx as serviced. Added last so a
     # mid-registration failure leaves the ctx unmarked and a retry re-runs.

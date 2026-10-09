@@ -131,7 +131,7 @@ _GET_ROUTES = frozenset(
     # while POST /status -> 405 and POST /nope -> 404. Nothing shipped POSTs here, so no
     # client changes; a route table audit stops lying.
     {"/health", "/status", "/policy", "/blocklist", "/liveness",
-     "/compaction", "/lint", "/explain", "/routes", "/capabilities", "/console"}
+     "/compaction", "/lint", "/explain", "/routes", "/outcomes", "/capabilities", "/console"}
 )
 _POST_ROUTES = frozenset(
     {"/explain", "/plan", "/apply", "/apply/revert"}
@@ -565,6 +565,8 @@ class SidecarApp:
             except (TypeError, ValueError):
                 limit = 50
             return 200, self._service.routes(limit=limit)
+        if path == "/outcomes":
+            return 200, self._service.outcomes()
         if path == "/lint":
             return 200, self._service.lint()
         if path == "/explain":

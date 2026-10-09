@@ -2796,6 +2796,14 @@ class RouterService:
             from router.durable_decision_log import merge_attempts
         return merge_attempts(collected)
 
+    def outcomes(self) -> Dict[str, Any]:
+        """Success / blocked / rate_limited rates per tier, from the outcome journal."""
+        try:
+            from . import outcomes as _outcomes
+        except ImportError:  # pragma: no cover - flat layout used by the test harness
+            from router import outcomes as _outcomes
+        return _outcomes.summarize(self._read_trace_entries(), _outcomes.read_outcomes())
+
     def routes(self, limit: int = 50) -> Dict[str, Any]:
         """Return a compact list of recent routes, most recent first.
 

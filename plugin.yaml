@@ -46,4 +46,7 @@ provides_tools:
 provides_hooks:
   - post_tool_call
   - pre_kanban_dispatch
+  - kanban_task_completed
+  - kanban_task_blocked
+  - on_kanban_worker_exited
 requires_env: []
