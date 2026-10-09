@@ -189,3 +189,8 @@ def test_log_path_absolute_and_custom(env, tmp_path):
 
 def test_threading_module_used():
     assert rt.threading is threading
+
+
+def test_save_breaker_swallows_errors(env, monkeypatch):
+    monkeypatch.setattr(rt, "state_dir", lambda: (_ for _ in ()).throw(OSError("x")))
+    rt.save_breaker(0.0)

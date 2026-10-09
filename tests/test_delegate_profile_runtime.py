@@ -1629,7 +1629,8 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         ctx = self._Ctx()
         _dp.register(ctx)
         assert ctx.hooks == [
-            "post_tool_call", "pre_api_request", "post_api_request", "pre_kanban_dispatch",
+            "post_tool_call", "pre_api_request", "post_api_request", "pre_tool_call", "pre_llm_call",
+            "pre_kanban_dispatch",
             "kanban_task_completed",
             "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
         ]
@@ -1642,7 +1643,8 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         _dp.register(ctx)
         assert ctx.tools == ["delegate_profile"]
         assert ctx.hooks == [
-            "post_tool_call", "pre_api_request", "post_api_request", "pre_kanban_dispatch",
+            "post_tool_call", "pre_api_request", "post_api_request", "pre_tool_call", "pre_llm_call",
+            "pre_kanban_dispatch",
             "kanban_task_completed",
             "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
         ]
@@ -1753,7 +1755,8 @@ def test_a_host_without_register_middleware_still_registers_everything_else(monk
 
     assert ctx.tools and ctx.tools[0]["name"] == "delegate_profile"
     assert [a[0] for a in ctx.hooks] == [
-        "post_tool_call", "pre_api_request", "post_api_request", "pre_kanban_dispatch",
+        "post_tool_call", "pre_api_request", "post_api_request", "pre_tool_call", "pre_llm_call",
+            "pre_kanban_dispatch",
             "kanban_task_completed",
         "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
     ]

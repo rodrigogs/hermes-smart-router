@@ -2133,6 +2133,34 @@ def _make_post_api_request(ctx: Any) -> Callable[..., None]:
     return _on_post_api_request
 
 
+def _alignment_actions():
+    if _LOADED_AS_PACKAGE:
+        from .router import alignment_actions
+    else:
+        from router import alignment_actions
+    return alignment_actions
+
+
+def _on_alignment_pre_tool_call(**kw: Any) -> Optional[Dict[str, str]]:
+    try:
+        cfg = _load_router_config().get("alignment")
+        if isinstance(cfg, dict) and cfg.get("enabled"):
+            return _alignment_actions().pre_tool_call(cfg, **kw)
+    except Exception as exc:  # noqa: BLE001 - must never break a turn
+        _warn_once(f"hermes-smart-router: alignment pre_tool_call failed: {exc}")
+    return None
+
+
+def _on_alignment_pre_llm_call(**kw: Any) -> Optional[Dict[str, str]]:
+    try:
+        cfg = _load_router_config().get("alignment")
+        if isinstance(cfg, dict) and cfg.get("enabled"):
+            return _alignment_actions().pre_llm_call(cfg, **kw)
+    except Exception as exc:  # noqa: BLE001 - must never break a turn
+        _warn_once(f"hermes-smart-router: alignment pre_llm_call failed: {exc}")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Plugin registration
 # ---------------------------------------------------------------------------
@@ -2375,6 +2403,9 @@ def register(ctx):
     # Session-alignment observer (F7). Inert unless router.yaml has `alignment.enabled`.
     ctx.register_hook("pre_api_request", _on_pre_api_request)
     ctx.register_hook("post_api_request", _make_post_api_request(ctx))
+    # Session-alignment executors (F8). Act only under `alignment.mode: enforce`.
+    ctx.register_hook("pre_tool_call", _on_alignment_pre_tool_call)
+    ctx.register_hook("pre_llm_call", _on_alignment_pre_llm_call)
 
     # ``smart-router`` AS A SELECTABLE MODEL. Picking that id — with `/model
     # smart-router`, or in a picker that offers it — means "let the router choose this

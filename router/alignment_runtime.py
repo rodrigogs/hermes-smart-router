@@ -9,8 +9,7 @@ State is a JSON file under ``router.paths.state_dir()`` and is re-read on every
 call, so there is no module state for a plugin reload to lose. Only the judge
 breaker lives in memory (it is a cooldown, not a ledger).
 
-``mode: shadow`` judges and logs; no action is ever taken. Executors (adjust,
-block, comment) belong to F8, so until then every mode only records.
+``mode: shadow`` judges and logs; only ``mode: enforce`` acts, via alignment_actions (F8).
 """
 
 from __future__ import annotations
@@ -24,12 +23,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 try:  # package import (installed plugin) or flat import (dev harness)
-    from . import alignment, alignment_alert, alignment_judge, alignment_package
+    from . import alignment, alignment_actions, alignment_alert, alignment_judge, alignment_package
     from .breaker import BreakerState
     from .model_lint import load_cache
     from .paths import hermes_root, state_dir
 except ImportError:  # pragma: no cover - exercised only by the flat harness
-    from router import alignment, alignment_alert, alignment_judge, alignment_package
+    from router import alignment, alignment_actions, alignment_alert, alignment_judge, alignment_package
     from router.breaker import BreakerState
     from router.model_lint import load_cache
     from router.paths import hermes_root, state_dir
@@ -104,6 +103,22 @@ def save_state(session_id: str, st: alignment.AlignmentState) -> None:
     os.replace(tmp, path)
 
 
+BREAKER_FILE = "alignment-breaker.json"
+
+
+def save_breaker(now: float) -> None:
+    """Snapshot the in-memory judge breaker so the sidecar (another process) can read it."""
+    try:
+        snap = {"ts": now, "entries": _BREAKER.blocked_entries(now)}
+        path = state_dir() / BREAKER_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(snap), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 - a status snapshot must never break the judge
+        pass
+
+
 def append_log(config: Mapping[str, Any], entry: Dict[str, Any]) -> None:
     path = _log_path(config)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -151,6 +166,10 @@ def _evaluate(
                     cur.fired, cur.evaluations, counters.iteration, cur.disabled_until,
                 ))
         mode = config.get("mode", "shadow")
+        outcome = alignment_actions.apply(
+            verdict, config, task_id=kanban_task, run_id=counters.run_id,
+            session_id=counters.session_id, goal_mode=counters.goal_turn is not None,
+        )
         entry = {
             "ts": now, "session_id": counters.session_id, "task_id": kanban_task,
             "run_id": counters.run_id, "iteration": counters.iteration,
@@ -159,9 +178,12 @@ def _evaluate(
             "reasons": verdict.reasons, "evidence": verdict.evidence,
             "failed_open": verdict.failed_open,
             "judge": f"{verdict.provider}/{verdict.model}",
-            "tokens": pkg.get("tokens"), "action_taken": False,
+            "tokens": pkg.get("tokens"), "action_taken": outcome.acted,
+            "action": outcome.action, "channel": outcome.channel,
+            "action_note": outcome.reason,
         }
         append_log(config, entry)
+        save_breaker(now)
         alignment_alert.send_alert(config, entry)
     except Exception as exc:  # noqa: BLE001 - a daemon thread must not leak
         logger.warning("hermes-smart-router: alignment evaluation failed: %s", exc)
