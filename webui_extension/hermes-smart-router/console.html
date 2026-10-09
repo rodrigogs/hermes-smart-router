@@ -2147,6 +2147,12 @@
             <div id="replayPlan"></div>
           </div>
         </div>
+        <!-- Alignment (card t_904708a8): READ-ONLY. No controls until the shadow review
+             (F11) is accepted. Absent when the router has no alignment data (§2.1). -->
+        <div class="price-section" id="alignmentSection" hidden>
+          <div class="group-head"><h2>Alinhamento da sessão</h2><span class="screen-note" id="alignmentNote"></span></div>
+          <div class="price-box" id="alignmentPanel"></div>
+        </div>
       </section>
 
       <!-- ── Política: o arquivo que decide, como texto ──────────────── -->
@@ -12478,6 +12484,58 @@
         state.tierFix = null;
         renderAll();
         loadTierCost();
+        loadAlignment();
+      }
+
+      // Alignment panel: mode, last evaluations, verdict counts, judge breaker.
+      // Optional read; absent (not an empty frame) when the sidecar has no route
+      // or alignment was never configured and never ran.
+      async function loadAlignment() {
+        const sec = $('alignmentSection');
+        const box = $('alignmentPanel');
+        if (!sec || !box) return;
+        const res = await call('/alignment-panel');
+        const d = res && res.data;
+        box.textContent = '';
+        if (res.error || res.missing || !d || typeof d.counts !== 'object'
+            || (!d.configured && !d.evaluations)) {
+          sec.hidden = true;
+          return;
+        }
+        sec.hidden = false;
+        const modeWord = { shadow: 'sombra (só registra)', alert: 'alerta', act: 'age' };
+        $('alignmentNote').textContent = d.configured ? (modeWord[d.mode] || d.mode) : 'inativo';
+        const c = d.counts;
+        box.append(el('p', 'nothing',
+          `${d.evaluations} avaliações · continuar ${c.continue} · ajustar ${c.adjust} · `
+          + `bloquear ${c.block} · juiz indisponível ${c.failed_open}`));
+        const open = (d.breaker && d.breaker.open) || [];
+        const br = el('p', 'nothing');
+        if (open.length) {
+          br.style.color = 'var(--warn-text)';
+          br.textContent = 'Disjuntor do juiz aberto: ' + open.map((b) => `${b.model_key} `
+            + `(${b.state}, ${Math.round(b.cooldown_remaining_s || 0)} s)`).join(', ');
+        } else {
+          br.textContent = d.breaker && d.breaker.known
+            ? 'Disjuntor do juiz fechado' : 'Disjuntor do juiz: sem leitura ainda';
+        }
+        box.append(br);
+        if (!(d.recent || []).length) return;
+        const table = el('table', 'tier-cost-table');
+        const head = el('tr');
+        ['Quando', 'Tarefa', 'Veredito', 'Confiança', 'Juiz', 'Ação']
+          .forEach((h) => head.append(el('th', '', h)));
+        table.append(head);
+        d.recent.forEach((e) => {
+          const row = el('tr');
+          const verdict = e.failed_open ? `indisponível (${e.failed_open})` : e.verdict;
+          [ago(e.ts, nowUtc()), e.task_id || '—', verdict,
+           e.confidence === null || e.confidence === undefined ? '—' : Number(e.confidence).toFixed(2),
+           e.judge || '—', e.action || '—']
+            .forEach((v) => row.append(el('td', '', v)));
+          table.append(row);
+        });
+        box.append(table);
       }
 
       // Cost and latency per tier. Optional read: a sidecar without /tier-cost

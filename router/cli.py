@@ -556,6 +556,17 @@ def cmd_log(args: argparse.Namespace) -> None:
         print("router: --follow not yet implemented (v2)")
 
 
+def cmd_alignment_report(args: argparse.Namespace) -> None:
+    """Alignment precision/recall with Wilson intervals."""
+    try:
+        from . import alignment_eval as ev
+    except ImportError:  # pragma: no cover - flat layout
+        from router import alignment_eval as ev
+    rep = ev.report_from_disk(
+        Path(args.log) if args.log else None, Path(args.db) if args.db else None)
+    print(json.dumps(rep, indent=2) if args.json else ev.render(rep))
+
+
 # ---------------------------------------------------------------------------
 # Chain plan — resolution (guarded) and rendering
 # ---------------------------------------------------------------------------
@@ -1253,6 +1264,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--follow", "-f", action="store_true",
                        help="Follow (v2)")
     p_log.set_defaults(func=cmd_log)
+
+    # alignment
+    p_al = sub.add_parser("alignment", help="Session-alignment evaluation")
+    al_sub = p_al.add_subparsers(dest="alignment_command", required=True)
+    p_rep = al_sub.add_parser("report", help="Precision/recall (Wilson) of judged runs")
+    p_rep.add_argument("--log", help="alignment.jsonl path")
+    p_rep.add_argument("--db", help="kanban.db path (read-only snapshot)")
+    p_rep.add_argument("--json", action="store_true", help="Emit JSON")
+    p_rep.set_defaults(func=cmd_alignment_report)
 
     return parser
 

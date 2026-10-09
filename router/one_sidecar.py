@@ -131,7 +131,7 @@ _GET_ROUTES = frozenset(
     # while POST /status -> 405 and POST /nope -> 404. Nothing shipped POSTs here, so no
     # client changes; a route table audit stops lying.
     {"/health", "/status", "/policy", "/blocklist", "/liveness",
-     "/compaction", "/lint", "/explain", "/routes", "/outcomes", "/tier-cost", "/premium-budget", "/capabilities", "/console"}
+     "/compaction", "/lint", "/explain", "/routes", "/outcomes", "/alignment", "/alignment-panel", "/tier-cost", "/premium-budget", "/capabilities", "/console"}
 )
 _POST_ROUTES = frozenset(
     {"/explain", "/plan", "/apply", "/apply/revert"}
@@ -570,6 +570,10 @@ class SidecarApp:
                 limit=limit, source=src or None, policy_only=policy_only)
         if path == "/outcomes":
             return 200, self._service.outcomes()
+        if path == "/alignment":
+            return 200, self._service.alignment()
+        if path == "/alignment-panel":
+            return 200, self._service.alignment_panel()
         if path == "/tier-cost":
             try:
                 days = int((query.get("days") or ["7"])[0])

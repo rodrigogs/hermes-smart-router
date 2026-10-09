@@ -2809,6 +2809,23 @@ class RouterService:
             from router import outcomes as _outcomes
         return _outcomes.summarize(self._read_trace_entries(), _outcomes.read_outcomes())
 
+    def alignment(self) -> Dict[str, Any]:
+        """Precision/recall (Wilson) of alignment verdicts against board outcomes."""
+        try:
+            from . import alignment_eval as _ev
+        except ImportError:  # pragma: no cover - flat layout used by the test harness
+            from router import alignment_eval as _ev
+        return _ev.report_from_disk()
+
+    def alignment_panel(self) -> Dict[str, Any]:
+        """Read-only snapshot for the console's Alignment panel."""
+        try:
+            from . import alignment_eval as _ev
+        except ImportError:  # pragma: no cover - flat layout used by the test harness
+            from router import alignment_eval as _ev
+        config, _errors = self._load()
+        return _ev.panel_from_disk(config.get("alignment") or {})
+
     def tier_cost(self, days: int = 7) -> Dict[str, Any]:
         """Cost and latency per tier over the last ``days`` days."""
         try:
