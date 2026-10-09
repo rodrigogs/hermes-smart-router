@@ -45,6 +45,8 @@ provides_tools:
 # nothing at runtime and everything in describing what this plugin is.
 provides_hooks:
   - post_tool_call
+  - pre_api_request
+  - post_api_request
   - pre_kanban_dispatch
   - kanban_task_completed
   - kanban_task_blocked

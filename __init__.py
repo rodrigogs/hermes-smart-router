@@ -2100,6 +2100,40 @@ def _on_post_tool_call(
 
 
 # ---------------------------------------------------------------------------
+# Session-alignment observer (F7)
+# ---------------------------------------------------------------------------
+def _alignment_module():
+    if _LOADED_AS_PACKAGE:
+        from .router import alignment_runtime
+    else:
+        from router import alignment_runtime
+    return alignment_runtime
+
+
+def _on_pre_api_request(**kw: Any) -> None:
+    """Keep the live transcript for the judge; post_api_request does not carry it."""
+    try:
+        cfg = _load_router_config().get("alignment")
+        if isinstance(cfg, dict) and cfg.get("enabled"):
+            _alignment_module().stash_history(
+                str(kw.get("session_id") or ""), kw.get("conversation_history"),
+            )
+    except Exception as exc:  # noqa: BLE001 - must never break a turn
+        _warn_once(f"hermes-smart-router: alignment pre_api_request failed: {exc}")
+
+
+def _make_post_api_request(ctx: Any) -> Callable[..., None]:
+    def _on_post_api_request(**kw: Any) -> None:
+        try:
+            cfg = _load_router_config().get("alignment")
+            if isinstance(cfg, dict) and cfg.get("enabled"):
+                _alignment_module().observe_post_api_request(ctx, cfg, **kw)
+        except Exception as exc:  # noqa: BLE001 - must never break a turn
+            _warn_once(f"hermes-smart-router: alignment post_api_request failed: {exc}")
+    return _on_post_api_request
+
+
+# ---------------------------------------------------------------------------
 # Plugin registration
 # ---------------------------------------------------------------------------
 # Contexts register() has already serviced, keyed by id(ctx). The host calls
@@ -2338,6 +2372,9 @@ def register(ctx):
         )
 
     ctx.register_hook("post_tool_call", _on_post_tool_call)
+    # Session-alignment observer (F7). Inert unless router.yaml has `alignment.enabled`.
+    ctx.register_hook("pre_api_request", _on_pre_api_request)
+    ctx.register_hook("post_api_request", _make_post_api_request(ctx))
 
     # ``smart-router`` AS A SELECTABLE MODEL. Picking that id — with `/model
     # smart-router`, or in a picker that offers it — means "let the router choose this
