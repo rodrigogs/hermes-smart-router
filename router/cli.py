@@ -456,6 +456,25 @@ def cmd_lint(args: argparse.Namespace) -> None:
     _print_warnings(warnings)
 
 
+def cmd_model_lint(args: argparse.Namespace) -> None:
+    """Exit 1 listing every model/provider pair missing from the Hermes cache."""
+    from . import model_lint
+    from .paths import hermes_root
+
+    root = hermes_root()
+    problems = model_lint.run(
+        Path(args.config),
+        Path(args.profiles_dir) if args.profiles_dir else root / "profiles",
+        Path(args.cache) if args.cache else root / "provider_models_cache.json",
+    )
+    if problems:
+        print(f"router: {len(problems)} model(s) missing from provider cache:")
+        for p in problems:
+            print(f"  - {p}")
+        sys.exit(1)
+    print("router: all models exist in provider cache")
+
+
 def _print_warnings(warnings: List[str]) -> None:
     """Print the advisory block. Exit code is deliberately untouched."""
     if not warnings:
@@ -1214,6 +1233,14 @@ def build_parser() -> argparse.ArgumentParser:
     # lint
     p_lint = sub.add_parser("lint", help="Validate router.yaml")
     p_lint.set_defaults(func=cmd_lint)
+
+    # model-lint
+    p_ml = sub.add_parser(
+        "model-lint", help="Check router.yaml/profile models against the Hermes cache"
+    )
+    p_ml.add_argument("--profiles-dir", help="Default: <hermes root>/profiles")
+    p_ml.add_argument("--cache", help="Default: <hermes root>/provider_models_cache.json")
+    p_ml.set_defaults(func=cmd_model_lint)
 
     # blocklist
     p_bl = sub.add_parser("blocklist", help="Show blocked models")
