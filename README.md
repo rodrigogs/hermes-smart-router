@@ -416,3 +416,19 @@ checkout permanently dirty and conflict on every pull.
 - `router.yaml` — gitignored, seeded from the example on first load, then yours.
 
 To start over, delete `router.yaml` and it will be re-seeded.
+
+## What leaves the machine (session-alignment judge)
+
+The alignment judge (`router/alignment_judge.py`, guarded by `router/alignment_guard.py`)
+sends a compacted, redacted transcript package to an LLM provider. It contains the card
+title/body, the first user message, recent messages and truncated tool results (file
+contents and command output may appear). Secrets matching the redaction patterns, images
+and base64 blobs are removed before sending; redaction is best effort, not a guarantee.
+
+- `privacy.allow_providers` is an allowlist. A provider not on it is never contacted; an
+  empty or missing list refuses every send (verdict `continue`, `failed_open: privacy_refused`).
+- `max_judge_calls_per_day` (default 40, UTC day) and `max_judge_input_tokens` (per call)
+  are hard caps; `max_judge_tokens_per_day` is optional. Hitting one fails open to
+  `continue` (`call_cap` / `token_cap`). The call counter is charged before the call.
+- Copilot judge calls are premium requests. See docs/research/2026-10-copilot-premium-budget.md.
+- Alerts carry card id, verdict and reasons, never the transcript.

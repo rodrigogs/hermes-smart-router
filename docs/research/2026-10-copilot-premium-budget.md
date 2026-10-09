@@ -39,3 +39,13 @@ Trace window used: last 30 days, 159 decisions (`python scripts/premium_budget_r
 
 - Let the sidecar run for 7 days, then run `python scripts/premium_budget_report.py 7` and paste the table here.
 - Confirm the plan (legacy annual vs usage-based) and the multipliers for claude-opus-5.5/sonnet-5.5/haiku-5.5 and gpt-6.1-sol; put them in `MULTIPLIERS`.
+
+## 6. Judge multiplier (card F12, t_be596f96; checked 2026-10-09)
+
+Result: NOT MEASURABLE from here, and not published. The GitHub Docs table (annual legacy plans) lists
+Haiku 4.5 0.33, Sonnet 4.6 9, Opus 4.8 27, GPT-5.4 6, GPT-5.5 57; it has no row for claude-opus-5.5 or
+gpt-6.1-sol. Usage-based plans (since 2026-06-01) have no multipliers at all. Reading the real value needs
+the account's Copilot usage page before/after one judge call; no such access exists in this session.
+Until then the judge is counted at 1.0 (unpublished) and the ceiling is `max_judge_calls_per_day`, which
+bounds cost at N x multiplier per day: at 40 calls, an Opus-class multiplier of 27 would be 1080 requests/day.
+Enable a Copilot judge only after reading the multiplier off the usage page and sizing the cap against it.
