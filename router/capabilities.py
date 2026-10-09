@@ -879,6 +879,81 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
         "price_in": 1.00,
         "price_out": 5.00,
     },
+    # -- copilot rows (added 2026-10-09, card t_03b03eeb) -------------------
+    # Model ids/providers read from ~/.hermes/provider_models_cache.json
+    # (copilot list, at=1791510309). Dollars are the per-1M-token rates on
+    # https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing
+    # read 2026-10-09; Copilot bills those in AI credits (1 credit = $0.01).
+    # PREMIUM-REQUEST MULTIPLIERS: https://docs.github.com/en/copilot/reference/
+    # copilot-billing/request-based-billing-legacy/model-multipliers-for-annual-plans
+    # (read 2026-10-09) applies ONLY to legacy annual Pro/Pro+ plans; usage
+    # billing has no multipliers. It publishes gpt-5.4 = 6 and NOTHING for the
+    # other four rows below, so no multiplier is invented for them. Window sizes
+    # come from the supported-models page (1M-capable, VS Code/CLI only);
+    # max_output is unverified and left undeclared.
+    "claude-opus-5.5": {
+        "provider": "copilot",
+        "context_window": 1_000_000,
+        "vision": True,
+        "tool_calling": True,
+        "structured_output": True,
+        "billing_mode": "plan",
+        "price_in": 4.00,
+        "price_out": 20.00,
+        "notes": "copilot; legacy annual premium-request multiplier: not published (2026-10-09)",
+    },
+    "claude-sonnet-5.5": {
+        "provider": "copilot",
+        "context_window": 1_000_000,
+        "vision": True,
+        "tool_calling": True,
+        "structured_output": True,
+        "billing_mode": "plan",
+        "price_in": 2.00,
+        "price_out": 10.00,
+        "notes": "copilot; legacy annual premium-request multiplier: not published (2026-10-09)",
+    },
+    "claude-haiku-5.5": {
+        "provider": "copilot",
+        "context_window": 1_000_000,
+        "vision": True,
+        "tool_calling": True,
+        "structured_output": True,
+        "billing_mode": "plan",
+        "notes": (
+            "copilot; absent from the 2026-10-09 pricing table, so no price "
+            "declared; legacy annual premium-request multiplier: not published"
+        ),
+    },
+    "gpt-6.1-sol": {
+        "provider": "openai-codex",
+        "context_window": 1_000_000,
+        "vision": True,
+        "tool_calling": True,
+        "structured_output": True,
+        "billing_mode": "subscription",
+        "price_in": 2.00,
+        "price_out": 10.00,
+        "notes": (
+            "also listed on copilot at the same rate (>272K input: 4.00/15.00); "
+            "legacy annual premium-request multiplier: not published (2026-10-09)"
+        ),
+    },
+    "gpt-5.4": {
+        "provider": "copilot",
+        "context_window": 1_000_000,
+        "max_input_tokens": 272_000,
+        "vision": True,
+        "tool_calling": True,
+        "structured_output": True,
+        "billing_mode": "plan",
+        "price_in": 2.50,
+        "price_out": 15.00,
+        "notes": (
+            "copilot legacy annual premium-request multiplier 6 (official "
+            "multipliers page, 2026-10-09); >272K input bills 5.00/22.50"
+        ),
+    },
     # -- nous (white-label reseller in front of openrouter) ----------------
     "stepfun/step-3.7-flash:free": {
         "provider": "nous",

@@ -3506,3 +3506,16 @@ def test_without_safety_margin_is_the_exact_inverse_direction_of_the_recorded_he
     for tokens in (1, 7, 128, 999, 65_536, 1_000_000):
         assert without_safety_margin(_with_safety_margin(tokens)) >= tokens - 1
         assert without_safety_margin(tokens) <= tokens
+
+
+def test_copilot_rows_registered_and_clean_with_only_published_multiplier_recorded():
+    """The five rows from card t_03b03eeb exist, lint clean, and the one
+    published Copilot premium-request multiplier (gpt-5.4 = 6) is on record."""
+    for model in (
+        "claude-opus-5.5", "claude-sonnet-5.5", "claude-haiku-5.5",
+        "gpt-6.1-sol", "gpt-5.4",
+    ):
+        assert model in caps_module.MODEL_CAPABILITIES
+    assert caps_module.registry_diagnostics() == []
+    assert "multiplier 6" in caps_module.MODEL_CAPABILITIES["gpt-5.4"]["notes"]
+    assert "2026-10-09" in caps_module.MODEL_CAPABILITIES["gpt-5.4"]["notes"]
