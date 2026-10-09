@@ -131,7 +131,7 @@ _GET_ROUTES = frozenset(
     # while POST /status -> 405 and POST /nope -> 404. Nothing shipped POSTs here, so no
     # client changes; a route table audit stops lying.
     {"/health", "/status", "/policy", "/blocklist", "/liveness",
-     "/compaction", "/lint", "/explain", "/routes", "/outcomes", "/capabilities", "/console"}
+     "/compaction", "/lint", "/explain", "/routes", "/outcomes", "/tier-cost", "/premium-budget", "/capabilities", "/console"}
 )
 _POST_ROUTES = frozenset(
     {"/explain", "/plan", "/apply", "/apply/revert"}
@@ -564,9 +564,24 @@ class SidecarApp:
                 limit = int((query.get("limit") or ["50"])[0])
             except (TypeError, ValueError):
                 limit = 50
-            return 200, self._service.routes(limit=limit)
+            src = (query.get("source") or [""])[0]
+            policy_only = (query.get("policy_only") or [""])[0].lower() in ("1", "true", "yes")
+            return 200, self._service.routes(
+                limit=limit, source=src or None, policy_only=policy_only)
         if path == "/outcomes":
             return 200, self._service.outcomes()
+        if path == "/tier-cost":
+            try:
+                days = int((query.get("days") or ["7"])[0])
+            except (TypeError, ValueError):
+                days = 7
+            return 200, self._service.tier_cost(days=days)
+        if path == "/premium-budget":
+            try:
+                days = int((query.get("days") or ["7"])[0])
+            except (TypeError, ValueError):
+                days = 7
+            return 200, self._service.premium_budget(days=days)
         if path == "/lint":
             return 200, self._service.lint()
         if path == "/explain":

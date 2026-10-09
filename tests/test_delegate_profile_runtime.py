@@ -1630,7 +1630,7 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         _dp.register(ctx)
         assert ctx.hooks == [
             "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
-            "kanban_task_blocked", "on_kanban_worker_exited",
+            "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
         ]
 
     def test_an_ordinary_process_still_gets_the_tool(self, monkeypatch):
@@ -1642,7 +1642,7 @@ class TestTheAntiRecursionGuaranteeIsEnforced:
         assert ctx.tools == ["delegate_profile"]
         assert ctx.hooks == [
             "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
-            "kanban_task_blocked", "on_kanban_worker_exited",
+            "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
         ]
 
     @pytest.mark.parametrize("value", ["0", "", "true", "yes", "2"])
@@ -1752,7 +1752,7 @@ def test_a_host_without_register_middleware_still_registers_everything_else(monk
     assert ctx.tools and ctx.tools[0]["name"] == "delegate_profile"
     assert [a[0] for a in ctx.hooks] == [
         "post_tool_call", "pre_kanban_dispatch", "kanban_task_completed",
-        "kanban_task_blocked", "on_kanban_worker_exited",
+        "kanban_task_blocked", "on_kanban_worker_exited", "on_kanban_dispatch_tick",
     ]
 
 
@@ -1776,7 +1776,7 @@ def test_the_middleware_rewrites_the_sentinel_to_the_routers_choice(monkeypatch)
     monkeypatch.setattr(_dp, "_make_classify_fn", lambda _ctx: None)
     monkeypatch.setattr(
         _dp, "_route_task",
-        lambda goal, requested, classify, prompt_text="": {
+        lambda goal, requested, classify, prompt_text="", source="": {
             "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "provider": "bedrock"},
     )
     _dp._PSEUDO_DECISIONS.clear()
@@ -1849,3 +1849,14 @@ def test_a_selected_pseudo_model_that_cannot_be_applied_says_so(monkeypatch):
     assert result is None, "nothing rewritten"
     assert warned, "and the operator is told, because the fake id is now on the wire"
     assert "smart-router" in warned[0] and "not applied" in warned[0]
+
+
+def test_each_trace_writer_stamps_its_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_ROUTE_TRACE_FILE", str(tmp_path / "routes.jsonl"))
+    kanban = _dp._KanbanShadowLog(task_id="t1", run_id=1)
+    kanban.record("classifier", {"model": "m"})
+    assert kanban.entries()[0]["source"] == "kanban"
+    import inspect
+    params = inspect.signature(_dp._route_task).parameters
+    assert params["source"].default == "delegate"
+    assert 'source="chat"' in inspect.getsource(_dp._on_llm_request)

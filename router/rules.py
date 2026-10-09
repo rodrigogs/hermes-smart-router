@@ -1396,7 +1396,7 @@ def _inject_overlay_windows(hop: Dict[str, Any], overlay: Dict[str, Any]) -> Non
 _FALLBACK_REGISTRY_FIELDS = frozenset({
     "provider", "context_window", "max_input_tokens", "max_output", "vision",
     "tool_calling", "structured_output", "billing_mode", "price_in",
-    "price_out", "price_windows", "price_windows_verified", "notes",
+    "price_out", "price_windows", "price_windows_verified", "notes", "runtime_override",
 })
 
 

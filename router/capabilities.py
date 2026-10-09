@@ -250,6 +250,9 @@ _COMMERCIAL_FIELDS: frozenset = frozenset(
         "price_windows",
         "price_windows_verified",
         "notes",
+        # Fields (context_window/vision) where this entry DELIBERATELY differs
+        # from the Hermes runtime's agent.models_dev; see router/runtime_caps.py.
+        "runtime_override",
     }
 )
 
@@ -482,6 +485,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-4.7": {
         "provider": "zai",
         "context_window": 200_000,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": False,
         "tool_calling": True,
@@ -519,6 +523,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-5.2": {
         "provider": "zai",
         "context_window": 1_048_576,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": False,
         "tool_calling": True,
@@ -531,6 +536,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-5.1": {
         "provider": "zai",
         "context_window": 204_800,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": False,
         "tool_calling": True,
@@ -566,6 +572,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-5v-turbo": {
         "provider": "zai",
         "context_window": 202_752,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": True,
         "tool_calling": True,
@@ -577,6 +584,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-4.6v": {
         "provider": "zai",
         "context_window": 204_800,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": True,
         "tool_calling": True,
@@ -593,6 +601,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "glm-4.5v": {
         "provider": "zai",
         "context_window": 65_536,
+        "runtime_override": ["context_window"],
         "max_output": 128_000,
         "vision": True,
         "tool_calling": True,
@@ -620,6 +629,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "deepseek-v4-flash": {
         "provider": "deepseek",
         "context_window": 1_048_576,
+        "runtime_override": ["context_window", "vision"],
         "max_output": 384_000,
         "vision": False,
         "tool_calling": True,
@@ -643,6 +653,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "deepseek-v4-pro": {
         "provider": "deepseek",
         "context_window": 1_048_576,
+        "runtime_override": ["context_window"],
         "max_output": 384_000,
         "vision": False,
         "tool_calling": True,
@@ -741,6 +752,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "mimo-v2.5": {
         "provider": "xiaomi",
         "context_window": 1_050_000,
+        "runtime_override": ["context_window"],
         "max_output": 131_072,
         "vision": True,
         "tool_calling": True,
@@ -756,6 +768,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "mimo-v2.5-pro": {
         "provider": "xiaomi",
         "context_window": 1_050_000,
+        "runtime_override": ["context_window"],
         "max_output": 131_072,
         "vision": False,
         "tool_calling": True,
@@ -928,6 +941,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "gpt-6.1-sol": {
         "provider": "openai-codex",
         "context_window": 1_000_000,
+        "runtime_override": ["context_window"],
         "vision": True,
         "tool_calling": True,
         "structured_output": True,
@@ -942,6 +956,7 @@ MODEL_CAPABILITIES: Dict[str, Dict[str, Any]] = {
     "gpt-5.4": {
         "provider": "copilot",
         "context_window": 1_000_000,
+        "runtime_override": ["context_window"],
         "max_input_tokens": 272_000,
         "vision": True,
         "tool_calling": True,

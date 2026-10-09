@@ -390,11 +390,28 @@ def attempted_head_of(entry: Any) -> Tuple[str, str]:
     return str(model), str(provider)
 
 
-class DecisionLog:
-    """Append-only decision log for greppable cause= tracing."""
+# Where a decision came from. Closed set; entries written before this field have
+# no ``source`` key and read back as UNKNOWN_SOURCE (never rewritten).
+VALID_SOURCES: Tuple[str, ...] = ("kanban", "chat", "delegate")
+UNKNOWN_SOURCE = "unknown"
 
-    def __init__(self) -> None:
+
+def source_of(entry: Any) -> str:
+    """``source`` of a recorded entry; ``unknown`` for old, corrupt or foreign values."""
+    value = entry.get("source") if isinstance(entry, dict) else None
+    return value if value in VALID_SOURCES else UNKNOWN_SOURCE
+
+
+class DecisionLog:
+    """Append-only decision log for greppable cause= tracing.
+
+    ``source`` (kanban | chat | delegate) stamps every entry this log records.
+    None records no key, which keeps the historical shape.
+    """
+
+    def __init__(self, source: Optional[str] = None) -> None:
         self._entries: List[Dict[str, Any]] = []
+        self._source = source if source in VALID_SOURCES else None
 
     def record(
         self,
@@ -464,6 +481,8 @@ class DecisionLog:
             "rule_id": matched_rule_id,
             "task": task_preview[:120],
         }
+        if self._source:
+            entry["source"] = self._source
         if steps is not None:
             entry["steps"] = steps
         if bounded is not None:

@@ -945,8 +945,12 @@ def _route_task(
     requested_model: str,
     classify_fn: Optional[Callable],
     prompt_text: str = "",
+    source: str = "delegate",
 ) -> Optional[Dict[str, Any]]:
     """Run the capability router on a goal string.
+
+    ``source`` stamps the persisted trace: ``delegate`` for the delegate_profile
+    tool, ``chat`` for the pseudo-model middleware.
 
     Returns {profile, model?, provider?, chain?} or None if routing failed /
     router unavailable / blocklist veto / recursion guard active. ``chain`` is
@@ -1030,7 +1034,7 @@ def _route_task(
             requested_model=requested_model,
             classify_fn=classify_fn,
             blocklist=blocklist,
-            decision_log=DurableDecisionLog(),
+            decision_log=DurableDecisionLog(source=source),
             prompt_text=prompt_text,
         )
 
@@ -1218,7 +1222,7 @@ class _KanbanShadowLog(DurableDecisionLog):
         task_id: str = "",
         run_id: Optional[int] = None,
     ) -> None:
-        super().__init__()
+        super().__init__(source="kanban")
         self._allowed_profile = allowed_profile
         self._live = live
         self._task_id = task_id
@@ -1497,6 +1501,18 @@ def _on_kanban_worker_exited(
         kind, "on_kanban_worker_exited", task_id, run_id,
         exit_kind=exit_kind, exit_code=exit_code,
     )
+
+
+def _on_kanban_dispatch_tick(**kwargs: Any) -> None:
+    """``on_kanban_dispatch_tick``: first tick after boot logs the liveness heartbeat."""
+    try:
+        if _LOADED_AS_PACKAGE:
+            from .router.gateway_liveness import on_dispatch_tick
+        else:  # direct source loading used by the development test harness
+            from router.gateway_liveness import on_dispatch_tick
+        on_dispatch_tick(**kwargs)
+    except Exception:
+        logger.debug("hermes-smart-router: liveness tick failed", exc_info=True)
 
 
 def shadow_gate_rate(limit: Optional[int] = None) -> Optional[float]:
@@ -2151,7 +2167,8 @@ def _on_llm_request(**context: Any) -> Optional[Dict[str, Any]]:
             # ctx, and _make_classify_fn needs one to reach the host's gated LLM. None is
             # a fine argument — _make_classify_fn then yields no classifier and Stage 0
             # decides alone, which is degraded but never broken.
-            return _route_task(text, "", _make_classify_fn(_MIDDLEWARE_CTX), prompt_text=text)
+            return _route_task(text, "", _make_classify_fn(_MIDDLEWARE_CTX),
+                               prompt_text=text, source="chat")
 
         plan = plan_rewrite(
             request,
@@ -2363,6 +2380,7 @@ def register(ctx):
     ctx.register_hook("kanban_task_completed", _on_kanban_task_completed)
     ctx.register_hook("kanban_task_blocked", _on_kanban_task_blocked)
     ctx.register_hook("on_kanban_worker_exited", _on_kanban_worker_exited)
+    ctx.register_hook("on_kanban_dispatch_tick", _on_kanban_dispatch_tick)
 
     # Registration completed — mark this ctx as serviced. Added last so a
     # mid-registration failure leaves the ctx unmarked and a retry re-runs.

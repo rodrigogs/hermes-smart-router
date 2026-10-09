@@ -49,4 +49,5 @@ provides_hooks:
   - kanban_task_completed
   - kanban_task_blocked
   - on_kanban_worker_exited
+  - on_kanban_dispatch_tick
 requires_env: []

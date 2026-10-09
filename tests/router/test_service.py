@@ -4762,3 +4762,51 @@ def test_a_classifier_the_file_omits_is_an_empty_block_not_a_missing_key(tmp_pat
     )
     served = RouterService(path).policy()
     assert served["classifier"] == {}
+
+
+# --- source field + obsolete-model filter (I7) -------------------------------
+
+def _policy_model(config_path):
+    import yaml
+    from router.service import _policy_models
+    return sorted(_policy_models(yaml.safe_load(config_path.read_text())))[0]
+
+
+def test_routes_report_source_and_in_policy_without_dropping_history(
+        tmp_path, monkeypatch, config_path):
+    live = _policy_model(config_path)
+    _seed_traces(tmp_path, monkeypatch, [
+        {"ts": 1.0, "cause": "classifier", "task": "old", "output": {"model": "gone-model"}},
+        {"ts": 2.0, "cause": "classifier", "task": "k", "source": "kanban",
+         "output": {"model": live}},
+        {"ts": 3.0, "cause": "classifier", "task": "c", "source": "chat",
+         "output": {"model": live}},
+        {"ts": 4.0, "cause": "classifier", "task": "x", "source": "bogus",
+         "output": {"model": live}},
+    ])
+    svc = RouterService(config_path)
+    everything = svc.routes()
+    assert everything["count"] == 4 and everything["matched"] == 4
+    by_task = {r["task"]: r for r in everything["routes"]}
+    assert by_task["old"]["source"] == "unknown" and by_task["old"]["in_policy"] is False
+    assert by_task["x"]["source"] == "unknown"
+    assert by_task["k"]["source"] == "kanban" and by_task["k"]["in_policy"] is True
+
+    only_kanban = svc.routes(source="kanban")
+    assert [r["task"] for r in only_kanban["routes"]] == ["k"]
+    assert only_kanban["count"] == 4 and only_kanban["matched"] == 1
+
+    current = svc.routes(policy_only=True)
+    assert sorted(r["task"] for r in current["routes"]) == ["c", "k", "x"]
+    assert current["count"] == 4  # the obsolete entry is still on record
+
+
+def test_decision_log_stamps_source_only_when_given():
+    from router.decision_log import DecisionLog, source_of
+    log = DecisionLog(source="chat")
+    log.record("classifier", {"model": "m"})
+    assert log.entries()[0]["source"] == "chat"
+    bare = DecisionLog()
+    bare.record("classifier", {"model": "m"})
+    assert "source" not in bare.entries()[0] and source_of(bare.entries()[0]) == "unknown"
+    assert DecisionLog(source="nope")._source is None

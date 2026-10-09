@@ -174,6 +174,11 @@ except ImportError:  # pragma: no cover - flat layout, or an older decision_log
     except ImportError:  # pragma: no cover - decision_log without the accessor
         _attempted_head_of = None  # type: ignore[assignment]
 
+try:
+    from .decision_log import source_of as _source_of
+except ImportError:  # pragma: no cover - flat layout
+    from router.decision_log import source_of as _source_of
+
 _DEFAULT_MAX_TASK_CHARS = 8_192
 
 # Bound on the composed prompt (``prompt_text``) a preview may be sized from.
@@ -2804,7 +2809,25 @@ class RouterService:
             from router import outcomes as _outcomes
         return _outcomes.summarize(self._read_trace_entries(), _outcomes.read_outcomes())
 
-    def routes(self, limit: int = 50) -> Dict[str, Any]:
+    def tier_cost(self, days: int = 7) -> Dict[str, Any]:
+        """Cost and latency per tier over the last ``days`` days."""
+        try:
+            from . import tier_cost as _tc
+        except ImportError:  # pragma: no cover - flat layout used by the test harness
+            from router import tier_cost as _tc
+        return _tc.report(self._read_trace_entries(), days=max(1, min(int(days), 365)))
+
+    def premium_budget(self, days: int = 7) -> Dict[str, Any]:
+        """Shadow count of Copilot premium requests per tier (1 per worker/child)."""
+        try:
+            from . import premium_budget as _pb
+        except ImportError:  # pragma: no cover - flat layout used by the test harness
+            from router import premium_budget as _pb
+        return _pb.report(self._read_trace_entries(), days=max(1, min(int(days), 365)))
+
+    def routes(
+        self, limit: int = 50, source: Optional[str] = None, policy_only: bool = False,
+    ) -> Dict[str, Any]:
         """Return a compact list of recent routes, most recent first.
 
         Each item: ``{id, ts, cause, rule_id, task, model, provider,
@@ -2829,6 +2852,13 @@ class RouterService:
         two are equal, which is the honest report of that case rather than a
         missing key.
 
+        Every item carries ``source`` (kanban | chat | delegate; ``unknown`` for
+        entries written before the field) and ``in_policy`` (is the model that ran
+        still named by the CURRENT router.yaml). ``source=`` and ``policy_only=``
+        are read-time filters over an untouched history: nothing is deleted or
+        rewritten. ``count`` stays the number of recorded entries; ``matched`` is
+        the number left after filtering.
+
         The import is relative-first for the reason :meth:`_trace_files`
         documents: under Hermes's ``hermes_plugins.<slug>`` shape the absolute
         name does not resolve, and this method is the Decisions surface.
@@ -2843,11 +2873,20 @@ class RouterService:
         except (TypeError, ValueError):
             safe_limit = 50
         entries = self._read_trace_entries()
+        policy_models = _policy_models(self._load()[0])
         items: List[Dict[str, Any]] = []
         for ordinal, entry in enumerate(entries):
             out = entry.get("output", {}) if isinstance(entry.get("output"), dict) else {}
             attempted_model, attempted_provider = self._attempted_head(entry)
+            item_source = _source_of(entry)
+            in_policy = attempted_model in policy_models
+            if source and item_source != source:
+                continue
+            if policy_only and not in_policy:
+                continue
             items.append({
+                "source": item_source,
+                "in_policy": in_policy,
                 "id": self._trace_id(entry, ordinal),
                 "ts": entry.get("ts"),
                 "cause": entry.get("cause"),
@@ -2866,7 +2905,8 @@ class RouterService:
         items.reverse()  # most recent first
         return {
             "trace_path": str(routes_path()),
-            "count": len(items),
+            "count": len(entries),
+            "matched": len(items),
             "routes": items[:safe_limit],
         }
 

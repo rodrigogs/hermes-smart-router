@@ -2088,6 +2088,12 @@
           <div class="group-head"><h2>Preço por hora</h2><span class="screen-note" id="priceNote">UTC</span></div>
           <div class="price-box" id="priceStrip"></div>
         </div>
+        <!-- Custo e latência por tier (card t_8846edad): GET /tier-cost?days=N.
+             subscription_included is its own column, never added to the USD total. -->
+        <div class="price-section">
+          <div class="group-head"><h2>Custo e latência por nível (tier)</h2><span class="screen-note" id="tierCostNote">7 dias</span></div>
+          <div class="price-box" id="tierCost"></div>
+        </div>
       </section>
 
       <!-- ── Decisões: what it actually decided ───────────────────────── -->
@@ -2104,6 +2110,18 @@
         <p class="routes-recon" id="routesRecon" hidden></p>
         <div class="canvas-row routes waiting" id="routesRow">
           <div>
+            <p class="routes-recon" id="routesSourceBar">
+              <label>Origem
+                <select id="routesSource" aria-label="Filtrar decisões por origem">
+                  <option value="all">todas</option>
+                  <option value="kanban">kanban</option>
+                  <option value="chat">chat</option>
+                  <option value="delegate">delegate</option>
+                  <option value="unknown">unknown (antigas)</option>
+                </select>
+              </label>
+              <label><input type="checkbox" id="routesHistory"> incluir modelos fora da política (histórico)</label>
+            </p>
             <input id="routesFilter" class="probe-input filter" type="search" autocomplete="off" hidden
                    placeholder="Filtrar por tarefa, modelo ou causa" aria-label="Filtrar decisões">
             <!-- The question an operator actually arrives with is "did anything go
@@ -2290,6 +2308,7 @@
         pending: new Set(), readFailures: {}, unreachable: false, checkedAt: null,
         // Until the first response lands, "nothing here" is not a fact yet.
         loading: true, query: '',
+        routesAll: [], routeSource: 'all', routeHistory: false,
         // How many decisions the sidecar says exist, which is not always how many
         // it sent us.
         routesTotal: 0,
@@ -11059,6 +11078,17 @@
       // ── Routes + replay ─────────────────────────────────────────────
       // Free-text over the three things an operator remembers about a decision:
       // what it was asked, where it went, and why.
+      // state.routesAll is the whole recorded history (nothing is deleted);
+      // state.routes is the view every metric reads. The view drops entries whose
+      // model is no longer in the policy (r.in_policy === false) unless the
+      // operator asks for history, and narrows to one source when picked.
+      function applyRouteFilters() {
+        const all = Array.isArray(state.routesAll) ? state.routesAll : [];
+        state.routes = all.filter((r) =>
+          (state.routeSource === 'all' || r.source === state.routeSource)
+          && (state.routeHistory || r.in_policy !== false));
+      }
+
       function matchesQuery(r, q) {
         if (!q) return true;
         return [r.task, r.model, r.cause, r.rule_id]
@@ -12421,7 +12451,10 @@
         // `if (res.missing || res.error) return null` — and this read did not.
         state.compaction = (compaction.error || compaction.missing)
           ? state.compaction : (compaction.data || null);
-        if (!routes.error) state.routes = (routes.data && Array.isArray(routes.data.routes)) ? routes.data.routes : [];
+        if (!routes.error) {
+          state.routesAll = (routes.data && Array.isArray(routes.data.routes)) ? routes.data.routes : [];
+          applyRouteFilters();
+        }
         // The envelope reports how many decisions EXIST; we were discarding it and
         // then presenting the page we happened to receive as the whole record.
         // Measured: the console asked for the default 50 while 71 were recorded, so
@@ -12444,6 +12477,44 @@
         state.unknownDismissed = {};
         state.tierFix = null;
         renderAll();
+        loadTierCost();
+      }
+
+      // Cost and latency per tier. Optional read: a sidecar without /tier-cost
+      // degrades to a stated absence, never a broken panel.
+      async function loadTierCost(days = 7) {
+        const box = $('tierCost');
+        if (!box) return;
+        const res = await call(`/tier-cost?days=${days}`);
+        box.textContent = '';
+        $('tierCostNote').textContent = `${days} dias`;
+        const data = res && res.data;
+        if (res.error || res.missing || !data || typeof data.tiers !== 'object') {
+          box.append(el('p', 'nothing', 'Este serviço do roteador não informa custo por nível (tier).'));
+          return;
+        }
+        const names = Object.keys(data.tiers);
+        if (!names.length) {
+          box.append(el('p', 'nothing', `Nenhuma execução de kanban nos últimos ${days} dias.`));
+          return;
+        }
+        const table = el('table', 'tier-cost-table');
+        const head = el('tr');
+        ['Tier', 'Execuções', 'Latência média', 'p95', 'Custo (USD)', 'Sem custo conhecido', 'Assinatura incluída']
+          .forEach((h) => head.append(el('th', '', h)));
+        table.append(head);
+        const fmt = (v, unit) => (v === null || v === undefined ? '—' : `${v}${unit}`);
+        names.forEach((name) => {
+          const t = data.tiers[name];
+          const inc = t.subscription_included || { sessions: 0, models: {} };
+          const row = el('tr');
+          [name, t.runs, fmt(t.latency_s && t.latency_s.avg, ' s'), fmt(t.latency_s && t.latency_s.p95, ' s'),
+           `$${Number(t.cost_usd).toFixed(4)}`, t.cost_unknown_sessions,
+           inc.sessions ? `${inc.sessions} sessões (${Object.keys(inc.models).join(', ')})` : '—']
+            .forEach((v) => row.append(el('td', '', v)));
+          table.append(row);
+        });
+        box.append(table);
       }
 
       // One tab switch, callable from anywhere: the lint jump (showLintTarget)
@@ -12605,6 +12676,12 @@
         }
         $('probeForm').addEventListener('submit', (e) => { e.preventDefault(); probe($('probeTask').value.trim()); });
         $('routesFilter').addEventListener('input', (e) => { state.query = e.target.value; renderRoutes(); });
+        $('routesSource').addEventListener('change', (e) => {
+          state.routeSource = e.target.value; applyRouteFilters(); renderAll();
+        });
+        $('routesHistory').addEventListener('change', (e) => {
+          state.routeHistory = e.target.checked; applyRouteFilters(); renderAll();
+        });
         const setScope = (scope) => { state.scope = scope; renderRoutes(); };
         $('scopeAll').addEventListener('click', () => setScope('all'));
         $('scopeOffRule').addEventListener('click', () => setScope('off-rule'));
