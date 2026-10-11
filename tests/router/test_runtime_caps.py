@@ -1,6 +1,7 @@
 """Registry context/vision must equal the Hermes runtime, or be a flagged override."""
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -20,14 +21,43 @@ RUNTIME = "/home/rodrigo/hermes-runtime"
 def real_lookup():
     if not __import__("os").path.isdir(RUNTIME):
         pytest.skip("Hermes runtime not present")
+
+    # The deploy gate runs from the hermes-agent development venv, which can
+    # have already imported a different ``agent`` package.  This integration
+    # check must inspect the served runtime at RUNTIME instead.
+    previous_agent_modules = {
+        name: module
+        for name, module in tuple(sys.modules.items())
+        if name == "agent" or name.startswith("agent.")
+    }
+    for name in previous_agent_modules:
+        del sys.modules[name]
     sys.path.insert(0, RUNTIME)
     try:
         lookup = load_runtime_lookup()
+        runtime_module = sys.modules.get("agent.models_dev")
+        assert runtime_module is not None
+        module_file = getattr(runtime_module, "__file__", None)
+        assert isinstance(module_file, str)
+        assert Path(module_file).resolve().is_relative_to(Path(RUNTIME).resolve())
+        runtime_snapshot = (
+            {
+                (entry["provider"], model): lookup(entry["provider"], model)
+                for model, entry in MODEL_CAPABILITIES.items()
+            }
+            if lookup is not None
+            else None
+        )
     finally:
         sys.path.remove(RUNTIME)
-    if lookup is None:
+        for name in tuple(sys.modules):
+            if name == "agent" or name.startswith("agent."):
+                del sys.modules[name]
+        sys.modules.update(previous_agent_modules)
+
+    if runtime_snapshot is None:
         pytest.skip("agent.models_dev not importable")
-    return lookup
+    return lambda provider, model: runtime_snapshot.get((provider, model))
 
 
 def test_every_model_equals_runtime_or_is_flagged_override(real_lookup):

@@ -135,8 +135,13 @@ def test_readers_survive_corrupt_dbs(tmp_path, monkeypatch):
     assert tc.read_runs(0) == [] and tc.read_sessions(0) == []
 
 
-def test_pricing_loader_absent_returns_none():
-    assert tc._pricing() is None or hasattr(tc._pricing(), "estimate_usage_cost")
+def test_pricing_loader_absent_returns_none(monkeypatch):
+    import sys
+
+    package = types.ModuleType("agent")
+    monkeypatch.setitem(sys.modules, "agent", package)
+    monkeypatch.delitem(sys.modules, "agent.usage_pricing", raising=False)
+    assert tc._pricing() is None
 
 
 def test_helpers():
